@@ -1,0 +1,10 @@
+# Dependencies for the local rendering-only preview (render_preview.py).
+# This is a DELIBERATE SUBSET of the Raspberry Pi's full dependency list:
+# it excludes every hardware-only package (spidev, gpiozero, lgpio,
+# aiomqtt, roborock, paho-mqtt) that only the real e-paper/GPIO path needs.
+# See README.md's "Python Dependencies" section for the full Pi install.
+Pillow
+requests
+google-api-python-client
+google-auth
+google-auth-httplib2

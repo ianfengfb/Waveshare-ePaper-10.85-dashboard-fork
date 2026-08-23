@@ -9,7 +9,6 @@ import requests
 import io
 import gc
 import socket
-import resource
 import signal
 import json
 import asyncio
@@ -29,9 +28,17 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 # --- SYSTEM LIMITS ---
+# `resource` is POSIX-only (no such module on Windows), so the rendering
+# path can run on Windows for local PNG previews without it.
 try:
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    import resource
+except ImportError:
+    resource = None
+
+try:
+    if resource:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 except Exception as e:
     print(f"Failed to set rlimit: {e}")
 
@@ -1241,6 +1248,24 @@ def render_screen(epd, fonts):
     return Himage
 
 
+# --- FONTS ---
+def load_fonts():
+    def load_font(name, size):
+        return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
+
+    return {
+        '20': load_font('Aldrich-Regular.ttc', 20),
+        '24': load_font('Aldrich-Regular.ttc', 24),
+        '28': load_font('Aldrich-Regular.ttc', 28),
+        '32': load_font('Aldrich-Regular.ttc', 32),
+        '35': load_font('Aldrich-Regular.ttc', 35),
+        '40': load_font('Aldrich-Regular.ttc', 40),
+        '60': load_font('Aldrich-Regular.ttc', 60),
+        '80': load_font('Aldrich-Regular.ttc', 80),
+        'clock': load_font('advanced_led_board-7.ttc', 180),
+    }
+
+
 # --- MAIN LOOP ---
 def main():
     auth_strava()
@@ -1259,20 +1284,7 @@ def main():
         time.sleep(1)
         epd.init_Part()
 
-        def load_font(name, size):
-            return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
-
-        fonts = {
-            '20': load_font('Aldrich-Regular.ttc', 20),
-            '24': load_font('Aldrich-Regular.ttc', 24),
-            '28': load_font('Aldrich-Regular.ttc', 28),
-            '32': load_font('Aldrich-Regular.ttc', 32),
-            '35': load_font('Aldrich-Regular.ttc', 35),
-            '40': load_font('Aldrich-Regular.ttc', 40),
-            '60': load_font('Aldrich-Regular.ttc', 60),
-            '80': load_font('Aldrich-Regular.ttc', 80),
-            'clock': load_font('advanced_led_board-7.ttc', 180),
-        }
+        fonts = load_fonts()
 
         t_data = threading.Thread(target=update_data_thread)
         t_data.daemon = True

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Dashboard runtime artefacts
+dashboard.log
+output.png
+
+# Secrets / tokens (never commit real credentials)
+token.json
+credentials.json
+auth.json
+claude_creds.json
+usage.json
+codex_usage.json
+limits.json
+strava_token.json
+roborock_session.pkl
+roborock_stats.json

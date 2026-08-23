@@ -21,6 +21,26 @@ A fully functional E-ink dashboard running on a Raspberry Pi Zero 1W or 2W. Desi
 
 ---
 
+## Local preview (no Raspberry Pi / e-paper hardware needed)
+
+Composing the frame is pure Python; only pushing it to the physical panel
+needs real hardware. To iterate on layout/widgets from a regular
+Windows/macOS/Linux machine and see the result as a PNG:
+
+```shell
+python -m venv .venv
+# Windows: .venv\Scripts\activate | macOS/Linux: source .venv/bin/activate
+pip install -r requirements-preview.txt
+python render_preview.py
+```
+
+This writes `output.png` (1360×480) that you can open and eyeball.
+`render_preview.py` auto-detects whether it's running on the Pi (with the
+real display driver installed) or not — no flag to flip, same command
+either way. See `CLAUDE.md` for how the hardware-import mocking works.
+
+---
+
 ## Prerequisites & Installation
 
 ### Hardware
