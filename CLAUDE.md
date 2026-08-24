@@ -9,6 +9,11 @@ various APIs, composes a single 1360×480 black-and-white image with Pillow,
 and pushes it to a Waveshare 10.85" e-paper display over SPI. Forked from
 [czuryk/Waveshare-ePaper-10.85-dashboard](https://github.com/czuryk/Waveshare-ePaper-10.85-dashboard).
 
+**Purpose**: this fork customises the display as a gift for the maintainer's
+wife, Charlotte — hence the personalised greeting widget (`GREETING_NAME` in
+`main.py`). Keep that framing in mind for widget/copy decisions: this is a
+personal, affectionate object, not a generic ops dashboard.
+
 - `main.py` — the whole app: widget toggles, API config, background data
   fetch thread (`update_data_thread`), the frame composer (`render_screen`),
   and the main render/refresh loop (`main()`).
