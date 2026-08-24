@@ -15,7 +15,7 @@ import asyncio
 import pickle
 import subprocess
 import math
-import calendar
+import random
 import urllib.parse
 from collections import deque
 from datetime import datetime, timezone
@@ -73,6 +73,17 @@ API_ENDPOINTS = {
 # --- CONFIGURATION ---
 LOCATION_LAT = 44.8140857
 LOCATION_LON = 20.3934271
+
+GREETING_NAME = "Charlotte"
+# Occasionally swap the Morning/Afternoon/Evening word for "hello" in another
+# language. Kept to unaccented Latin-script words since Aldrich-Regular.ttc
+# (the dashboard's only text font) has no CJK/accented glyphs.
+GREETING_INTL_CHANCE = 0.25
+GREETING_INTL_HELLOS = [
+    "Bonjour", "Hola", "Ciao", "Hallo", "Ola", "Halo", "Hei", "Ahoj",
+    "Czesc", "Merhaba", "Kumusta", "Habari", "Sawasdee", "Namaste", "Salut",
+]
+GREETING_LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
 
 PRINTER_CONF = {
     'IP': '192.168....',
@@ -831,6 +842,14 @@ def update_data_thread():
 
 
 # --- GRAPHICS FUNCTIONS ---
+def text_width(draw, text, font):
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0]
+    except AttributeError:
+        return draw.textsize(text, font=font)[0]
+
+
 def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
     icon = get_cached_icon(name, size, is_white)
     if icon:
@@ -1212,31 +1231,26 @@ def render_screen(epd, fonts):
             draw.text((col3_x + 140, sp_y + 50), track[:25], font=fonts['24'], fill=0)
 
     else:
-        # Fallback: Time Progress
-        tp_y = sp_y
-        draw.text((col3_x, tp_y), "TIME PROGRESS", font=fonts['28'], fill=0)
+        # Fallback: Greeting
+        gr_y = sp_y
+        widget_w = 400
 
-        day_pct = (dt.hour * 3600 + dt.minute * 60 + dt.second) / 86400.0
-        days_in_m = calendar.monthrange(dt.year, dt.month)[1]
-        month_pct = (dt.day - 1 + (dt.hour / 24.0)) / days_in_m
-        days_in_y = 366 if calendar.isleap(dt.year) else 365
-        year_pct = (dt.timetuple().tm_yday - 1 + (dt.hour / 24.0)) / days_in_y
+        if dt.hour < 12:
+            time_word = "Morning"
+        elif dt.hour < 17:
+            time_word = "Afternoon"
+        else:
+            time_word = "Evening"
 
-        def draw_prog(y_offset, label, pct):
-            draw.text((col3_x, tp_y + y_offset), label, font=fonts['24'], fill=0)
-            bx = col3_x + 110
-            bw = 200
-            bh = 20
-            draw.rectangle((bx, tp_y + y_offset + 2, bx + bw, tp_y + y_offset + bh + 2), outline=0, width=2)
-            if pct > 0:
-                fill_w = int((bw - 4) * min(pct, 1.0))
-                if fill_w > 0:
-                    draw.rectangle((bx + 2, tp_y + y_offset + 4, bx + 2 + fill_w, tp_y + y_offset + bh), fill=0)
-            draw.text((bx + bw + 15, tp_y + y_offset), f"{int(pct * 100)}%", font=fonts['24'], fill=0)
+        if random.random() < GREETING_INTL_CHANCE:
+            time_word = random.choice(GREETING_INTL_HELLOS)
 
-        draw_prog(40, "DAY", day_pct)
-        draw_prog(75, "MONTH", month_pct)
-        draw_prog(110, "YEAR", year_pct)
+        greeting = f"{time_word} {GREETING_NAME}"
+        gw = text_width(draw, greeting, fonts['35'])
+        draw.text((col3_x + max(0, (widget_w - gw) / 2), gr_y + 30), greeting, font=fonts['35'], fill=0)
+
+        lw = text_width(draw, GREETING_LOREM, fonts['14'])
+        draw.text((col3_x + max(0, (widget_w - lw) / 2), gr_y + 90), GREETING_LOREM, font=fonts['14'], fill=0)
 
     draw.line((col3_x, 380, epd.width - 20, 380), fill=0, width=2)
 
@@ -1254,6 +1268,7 @@ def load_fonts():
         return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
 
     return {
+        '14': load_font('Aldrich-Regular.ttc', 14),
         '20': load_font('Aldrich-Regular.ttc', 20),
         '24': load_font('Aldrich-Regular.ttc', 24),
         '28': load_font('Aldrich-Regular.ttc', 28),
