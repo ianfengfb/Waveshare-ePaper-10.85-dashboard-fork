@@ -76,9 +76,12 @@ LOCATION_LON = 20.3934271
 
 GREETING_NAME = "Charlotte"
 # Occasionally swap the Morning/Afternoon/Evening word for "hello" in another
-# language. Kept to unaccented Latin-script words since Aldrich-Regular.ttc
-# (the dashboard's only text font) has no CJK/accented glyphs.
+# language. Latin-script words render with Aldrich-Regular.ttc; the Chinese
+# option uses a small bundled CJK subset font (fnt/CJK-Greeting.ttf) since
+# Aldrich has no CJK glyphs.
 GREETING_INTL_CHANCE = 0.25
+GREETING_ZH_HELLO = "嗨"
+GREETING_ZH_CHANCE = 0.5  # share of the international slot given to Chinese
 GREETING_INTL_HELLOS = [
     "Bonjour", "Hola", "Ciao", "Hallo", "Ola", "Halo", "Hei", "Ahoj",
     "Czesc", "Merhaba", "Kumusta", "Habari", "Sawasdee", "Namaste", "Salut",
@@ -850,6 +853,19 @@ def text_width(draw, text, font):
         return draw.textsize(text, font=font)[0]
 
 
+def draw_mixed_text(draw, x, y_center, segments, fill=0):
+    """Draw left-to-right (text, font) segments that may mix fonts with
+    different vertical metrics (e.g. a CJK glyph next to Latin text),
+    vertically centring each segment's own bounding box on `y_center`
+    rather than aligning by baseline or top."""
+    cur_x = x
+    for text, font in segments:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        draw.text((cur_x, y_center - (bbox[3] - bbox[1]) / 2 - bbox[1]), text, font=font, fill=fill)
+        cur_x += bbox[2] - bbox[0]
+    return cur_x - x
+
+
 def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
     icon = get_cached_icon(name, size, is_white)
     if icon:
@@ -1242,12 +1258,16 @@ def render_screen(epd, fonts):
         else:
             time_word = "Evening"
 
+        segments = [(f"{time_word} ", fonts['35'])]
         if random.random() < GREETING_INTL_CHANCE:
-            time_word = random.choice(GREETING_INTL_HELLOS)
+            if random.random() < GREETING_ZH_CHANCE:
+                segments = [(GREETING_ZH_HELLO, fonts['cjk_greeting']), (" ", fonts['35'])]
+            else:
+                segments = [(f"{random.choice(GREETING_INTL_HELLOS)} ", fonts['35'])]
+        segments.append((GREETING_NAME, fonts['35']))
 
-        greeting = f"{time_word} {GREETING_NAME}"
-        gw = text_width(draw, greeting, fonts['35'])
-        draw.text((col3_x + max(0, (widget_w - gw) / 2), gr_y + 30), greeting, font=fonts['35'], fill=0)
+        gw = sum(text_width(draw, t, f) for t, f in segments)
+        draw_mixed_text(draw, col3_x + max(0, (widget_w - gw) / 2), gr_y + 45, segments)
 
         lw = text_width(draw, GREETING_LOREM, fonts['14'])
         draw.text((col3_x + max(0, (widget_w - lw) / 2), gr_y + 90), GREETING_LOREM, font=fonts['14'], fill=0)
@@ -1278,6 +1298,7 @@ def load_fonts():
         '60': load_font('Aldrich-Regular.ttc', 60),
         '80': load_font('Aldrich-Regular.ttc', 80),
         'clock': load_font('advanced_led_board-7.ttc', 180),
+        'cjk_greeting': load_font('CJK-Greeting.ttf', 40),
     }
 
 

@@ -83,13 +83,46 @@ Windows; the rlimit tweak it does is a no-op there.
 
 Every `ENABLE_*` widget toggle in `main.py` defaults to `False`, so a fresh
 checkout with no credentials configured already renders the fallback widgets
-(System Load, Crypto, Internet Ping, Time Progress) instead of the
-token-gated ones (Strava, Bambu, Roborock, Claude/Codex/Antigravity usage,
-Spotify) — this is the project's built-in graceful-degradation design, not
-something the preview pipeline needs to special-case. Weather and the Gmail
-unread count are not behind `ENABLE_*` flags: weather is a keyless public API
-so it renders for real whenever there's network access; Gmail unread quietly
-stays at `0` when no `token.json` is present.
+(System Load, Crypto, Internet Ping, Greeting) instead of the token-gated
+ones (Strava, Bambu, Roborock, Claude/Codex/Antigravity usage, Spotify) —
+this is the project's built-in graceful-degradation design, not something
+the preview pipeline needs to special-case. Weather and the Gmail unread
+count are not behind `ENABLE_*` flags: weather is a keyless public API so it
+renders for real whenever there's network access; Gmail unread quietly stays
+at `0` when no `token.json` is present.
+
+### Adding a CJK (or other non-Latin) glyph to a widget
+
+`fnt/Aldrich-Regular.ttc` and `fnt/advanced_led_board-7.ttc` (the only two
+fonts the dashboard ships) are Latin-only display fonts — no CJK, no
+accented Latin glyphs. Drawing an unsupported character with them doesn't
+error, it silently draws nothing (verified: `draw.text(..., "你好")` renders
+a blank string). Don't add a full CJK font (e.g. Noto Sans SC) to fix
+this — those run 10-20MB, which is a lot to vendor into a Pi Zero project
+for a handful of characters.
+
+Instead, subset the specific glyphs you need out of a system CJK font with
+`fonttools`. This container/most Linux dev boxes already have
+`/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc` (WenQuanYi Zen Hei — GPL-2
+with a font-embedding exception, freely redistributable) installed for
+headless Chromium/Playwright font rendering. To add e.g. "嗨" (U+55E8):
+
+```shell
+pip install fonttools
+python -m fontTools.subset \
+  /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc \
+  --font-number=0 --unicodes=U+55E8 --glyph-names \
+  --output-file=fnt/CJK-Greeting.ttf --no-hinting --desubroutinize
+```
+
+This produces a ~1.5KB font with just that glyph. `fnt/CJK-Greeting.ttf`
+already exists for the greeting widget's "嗨" — add more `--unicodes` (comma
+separated, or a new subset file) if a future widget needs different
+characters. When mixing a CJK glyph into a line of Latin text, don't align
+by baseline or top-left origin — the two fonts have very different vertical
+metrics and it looks visibly off. `draw_mixed_text()` in `main.py` instead
+centres each (text, font) segment's own bounding box on a shared
+`y_center`, which is what `render_screen()`'s greeting widget uses.
 
 ## Roadmap (not yet built — one session per item)
 
