@@ -57,6 +57,10 @@ ENABLE_ANTIGRAVITY = False
 ENABLE_CODEX = False
 ENABLE_CLAUDE = False
 ENABLE_SPOTIFY = False
+# The middle column shows Spotify now-playing instead of Weather while this
+# is False. Kept as a toggle (not deleted) so weather can come back on this
+# or another slot later — see CLAUDE.md roadmap.
+ENABLE_WEATHER = False
 
 # --- API ENDPOINTS ---
 API_ENDPOINTS = {
@@ -118,6 +122,10 @@ LASTFM_CONF = {
     'API_KEY': '...',
     'USERNAME': 'your_name'
 }
+# Album art is fetched at this size so the dithering is computed for the
+# widget's actual display size, not upscaled afterwards (which would smear
+# an already-dithered 1-bit image).
+SPOTIFY_ART_SIZE = 190
 
 STRAVA_CONF = {
     'TOKEN_FILE': os.path.join(BASE_DIR, 'strava_token.json')
@@ -852,7 +860,8 @@ def update_data_thread():
                             if img_url:
                                 img_bytes = net.get_image(img_url)
                                 if img_bytes:
-                                    img_pil = Image.open(io.BytesIO(img_bytes)).convert("L").resize((120, 120))
+                                    img_pil = Image.open(io.BytesIO(img_bytes)).convert("L").resize(
+                                        (SPOTIFY_ART_SIZE, SPOTIFY_ART_SIZE))
                                     enhancer = ImageEnhance.Contrast(img_pil)
                                     img_pil = enhancer.enhance(3.0)
                                     cover_dithered = img_pil.convert("1", dither=Image.NONE)
@@ -1141,10 +1150,10 @@ def render_screen(epd, fonts):
 
     draw.line((col_w, 10, col_w, 470), fill=0, width=2)
 
-    # --- COLUMN 2 (Weather) ---
+    # --- COLUMN 2 (Weather or Spotify) ---
     col2_x = col_w + 20
 
-    if 'current' in weather:
+    if ENABLE_WEATHER and 'current' in weather:
         cur = weather['current']
         temp = cur.get('temperature_2m', 0)
         hum = cur.get('relative_humidity_2m', 0)
@@ -1263,6 +1272,46 @@ def render_screen(epd, fonts):
                 f_temp = math.floor(temps[idx] + 0.5)
                 draw.text((off_x + 15, 440), f"{f_temp}°C", font=fonts['24'], fill=0)
 
+    elif not ENABLE_WEATHER:
+        # Fallback: Spotify now-playing (replaces Weather in this slot)
+        draw_icon(draw, col2_x, 20, "icon_spotify", (40, 40))
+        draw.text((col2_x + 50, 28), "SPOTIFY", font=fonts['28'], fill=0)
+        draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
+
+        content_w = col_w - 40
+        art_size = SPOTIFY_ART_SIZE
+        art_x = col2_x + max(0, (content_w - art_size) / 2)
+        art_y = 105
+
+        if spotify['status'] == 'PLAYING':
+            if spotify['cover']:
+                Himage.paste(spotify['cover'], (int(art_x), art_y))
+            else:
+                draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
+
+            draw_icon(draw, int(art_x + (art_size - 40) / 2), art_y + art_size + 15, "icon_play", (40, 40))
+
+            # Artist/track names are external (Last.fm) text of unpredictable
+            # length and character width, like the affirmation line — a
+            # naive character-count slice can still overflow the column, so
+            # measure and ellipsis-truncate in pixels instead.
+            words = spotify['text'].split(' - ')
+            artist_raw = words[0] if len(words) > 0 else "Unknown"
+            track_raw = words[1] if len(words) > 1 else ""
+            artist = wrap_lines_limited(draw, artist_raw, fonts['28'], content_w, max_lines=1)[0] if artist_raw else ""
+            track = wrap_lines_limited(draw, track_raw, fonts['24'], content_w, max_lines=1)[0] if track_raw else ""
+
+            row_y = art_y + art_size + 70
+            aw = text_width(draw, artist, fonts['28'])
+            draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=fonts['28'], fill=0)
+            tw = text_width(draw, track, fonts['24'])
+            draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=fonts['24'], fill=0)
+        else:
+            draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
+            msg = "Nothing Playing"
+            mw = text_width(draw, msg, fonts['28'])
+            draw.text((col2_x + max(0, (content_w - mw) / 2), art_y + art_size + 40), msg, font=fonts['28'], fill=0)
+
     draw.line((col_w * 2, 10, col_w * 2, 470), fill=0, width=2)
 
     # --- COLUMN 3 (Time, Claude/Spotify/Progress, Gmail) ---
@@ -1311,22 +1360,6 @@ def render_screen(epd, fonts):
             draw.rectangle((bx, sp_y + 115, bx + bw, sp_y + 115 + bh), outline=0, width=2)
             fill_w = int((bw - 4) * min(pct_7d / 100.0, 1.0))
             if fill_w > 0: draw.rectangle((bx + 2, sp_y + 117, bx + 2 + fill_w, sp_y + 115 + bh - 2), fill=0)
-
-    elif ENABLE_SPOTIFY:
-        if spotify['cover']:
-            Himage.paste(spotify['cover'], (col3_x, sp_y))
-        else:
-            draw_icon(draw, col3_x, sp_y, "icon_spotify", (120, 120))
-
-        status_ico = "icon_play" if spotify['status'] == 'PLAYING' else "icon_pause"
-        draw_icon(draw, col3_x + 140, sp_y + 10, status_ico, (30, 30))
-
-        if spotify['status'] == 'PLAYING':
-            words = spotify['text'].split(' - ')
-            artist = words[0] if len(words) > 0 else "Unknown"
-            track = words[1] if len(words) > 1 else ""
-            draw.text((col3_x + 180, sp_y + 10), artist[:20], font=fonts['28'], fill=0)
-            draw.text((col3_x + 140, sp_y + 50), track[:25], font=fonts['24'], fill=0)
 
     else:
         # Fallback: Greeting

@@ -105,6 +105,24 @@ character first, if even a single "word" is wider than the widget) whatever
 doesn't fit, so a long or malformed response can never overflow into the
 divider line or the Gmail widget below it.
 
+### Middle column: Spotify now-playing, not Weather
+
+`ENABLE_WEATHER = False` by default — the middle column shows the Spotify
+now-playing widget instead (`render_screen()`'s `elif not ENABLE_WEATHER:`
+branch), so Spotify and the greeting widget can be visible at the same time
+rather than fighting over the same column-3 slot they originally shared.
+Weather's drawing code is untouched, just gated behind the flag, so flipping
+it back to `True` restores it on this slot. `SPOTIFY_ART_SIZE` (currently
+190px) controls the album-art fetch/display size in one place — the fetch
+code (`update_data_thread`) resizes to this before dithering, since
+upscaling an already-dithered 1-bit image afterwards would smear it.
+
+Artist/track names come from Last.fm, same "unpredictable external text"
+category as the affirmation line — a plain `[:N]` character slice can still
+overflow the column if the text happens to be wide characters, so the
+widget reuses `wrap_lines_limited(..., max_lines=1)` to pixel-measure and
+ellipsis-truncate them instead, the same helper the affirmation line uses.
+
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
 `fnt/Aldrich-Regular.ttc` and `fnt/advanced_led_board-7.ttc` (the only two
@@ -165,7 +183,13 @@ until asked:
    Pi's LAN; the dashboard reads the stored value. (Strava is the fallback
    if this route isn't worth building.)
 4. **Spotify now-playing** is already implemented upstream via Last.fm
-   (`LASTFM_CONF`), documented here for context — no work needed.
+   (`LASTFM_CONF`) and now lives in the middle column (replacing Weather,
+   see above) — no work needed on the widget itself.
+5. **More middle-column widgets**: the Spotify widget doesn't fill the
+   whole column, and weather's slot is otherwise idle now. Candidates for
+   filling the remaining space, not yet scoped: a compact weather summary,
+   a second usage/status widget, or something else entirely — ask before
+   picking one.
 
 ## Conventions
 
