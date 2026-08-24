@@ -76,15 +76,18 @@ LOCATION_LON = 20.3934271
 
 GREETING_NAME = "Charlotte"
 # Occasionally swap the Morning/Afternoon/Evening word for "hello" in another
-# language. Latin-script words render with Aldrich-Regular.ttc; the Chinese
-# option uses a small bundled CJK subset font (fnt/CJK-Greeting.ttf) since
-# Aldrich has no CJK glyphs.
+# language. Each entry is (word, font_key): Latin-script words use font key
+# '35' (Aldrich-Regular.ttc); non-Latin ones use 'cjk_greeting', a small
+# bundled subset font (fnt/CJK-Greeting.ttf) since Aldrich has no CJK/kana
+# glyphs. See CLAUDE.md for how to add more non-Latin words.
 GREETING_INTL_CHANCE = 0.25
 GREETING_ZH_HELLO = "嗨"
 GREETING_ZH_CHANCE = 0.5  # share of the international slot given to Chinese
 GREETING_INTL_HELLOS = [
-    "Bonjour", "Hola", "Ciao", "Hallo", "Ola", "Halo", "Hei", "Ahoj",
-    "Czesc", "Merhaba", "Kumusta", "Habari", "Sawasdee", "Namaste", "Salut",
+    ("Bonjour", '35'), ("Hola", '35'), ("Ciao", '35'), ("Hallo", '35'),
+    ("Ola", '35'), ("Halo", '35'), ("Hei", '35'), ("こんにちは", 'cjk_greeting'),
+    ("Czesc", '35'), ("Merhaba", '35'), ("Kumusta", '35'), ("Habari", '35'),
+    ("Sawasdee", '35'), ("Namaste", '35'), ("Salut", '35'),
 ]
 GREETING_LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
 
@@ -1261,9 +1264,10 @@ def render_screen(epd, fonts):
         segments = [(f"{time_word} ", fonts['35'])]
         if random.random() < GREETING_INTL_CHANCE:
             if random.random() < GREETING_ZH_CHANCE:
-                segments = [(GREETING_ZH_HELLO, fonts['cjk_greeting']), (" ", fonts['35'])]
+                word, font_key = GREETING_ZH_HELLO, 'cjk_greeting'
             else:
-                segments = [(f"{random.choice(GREETING_INTL_HELLOS)} ", fonts['35'])]
+                word, font_key = random.choice(GREETING_INTL_HELLOS)
+            segments = [(word, fonts[font_key]), (" ", fonts['35'])]
         segments.append((GREETING_NAME, fonts['35']))
 
         gw = sum(text_width(draw, t, f) for t, f in segments)

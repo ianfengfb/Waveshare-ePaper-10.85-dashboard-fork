@@ -105,22 +105,29 @@ Instead, subset the specific glyphs you need out of a system CJK font with
 `fonttools`. This container/most Linux dev boxes already have
 `/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc` (WenQuanYi Zen Hei — GPL-2
 with a font-embedding exception, freely redistributable) installed for
-headless Chromium/Playwright font rendering. To add e.g. "嗨" (U+55E8):
+headless Chromium/Playwright font rendering, and it covers Hiragana/Katakana
+as well as Han, so it covers Chinese and Japanese greetings alike. Re-run
+the subset with the full set of code points every time (it's cumulative,
+not additive — a run with fewer `--unicodes` drops glyphs the file
+previously had):
 
 ```shell
 pip install fonttools
 python -m fontTools.subset \
   /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc \
-  --font-number=0 --unicodes=U+55E8 --glyph-names \
+  --font-number=0 \
+  --unicodes=U+55E8,U+3053,U+3093,U+306B,U+3061,U+306F \
+  --glyph-names \
   --output-file=fnt/CJK-Greeting.ttf --no-hinting --desubroutinize
 ```
 
-This produces a ~1.5KB font with just that glyph. `fnt/CJK-Greeting.ttf`
-already exists for the greeting widget's "嗨" — add more `--unicodes` (comma
-separated, or a new subset file) if a future widget needs different
-characters. When mixing a CJK glyph into a line of Latin text, don't align
-by baseline or top-left origin — the two fonts have very different vertical
-metrics and it looks visibly off. `draw_mixed_text()` in `main.py` instead
+That's every glyph `fnt/CJK-Greeting.ttf` currently needs: "嗨" (U+55E8) and
+"こんにちは" (U+3053, U+3093, U+306B, U+3061, U+306F) — 2.4KB total. Adding a
+handful more non-Latin greeting words this way costs low-single-digit KB,
+not a meaningful bump to repo size. When mixing a CJK/kana glyph into a line
+of Latin text, don't align by baseline or top-left origin — the two fonts
+have very different vertical metrics and it looks visibly off.
+`draw_mixed_text()` in `main.py` instead
 centres each (text, font) segment's own bounding box on a shared
 `y_center`, which is what `render_screen()`'s greeting widget uses.
 
