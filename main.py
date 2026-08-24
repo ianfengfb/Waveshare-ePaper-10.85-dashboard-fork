@@ -67,7 +67,8 @@ API_ENDPOINTS = {
     'strava_activities': 'https://www.strava.com/api/v3/athlete/activities',
     'btc': 'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart',
     'eth': 'https://api.coingecko.com/api/v3/coins/ethereum/market_chart',
-    'lastfm': 'http://ws.audioscrobbler.com/2.0/'
+    'lastfm': 'http://ws.audioscrobbler.com/2.0/',
+    'affirmation': 'https://www.affirmations.dev',
 }
 
 # --- CONFIGURATION ---
@@ -89,7 +90,19 @@ GREETING_INTL_HELLOS = [
     ("Czesc", '35'), ("Merhaba", '35'), ("Kumusta", '35'), ("Habari", '35'),
     ("Sawasdee", '35'), ("Namaste", '35'), ("Salut", '35'),
 ]
-GREETING_LOREM = "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+# Small-font line under the greeting: a short positive sentence from the
+# affirmations.dev API (keyless, like the weather/crypto widgets). Used as
+# the initial value before the first fetch completes, and kept as the
+# on-screen value whenever a fetch fails — the API is a small hobby-scale
+# service with no uptime guarantee, so a dead/unreachable endpoint should
+# never blank the line.
+GREETING_FALLBACK_AFFIRMATIONS = [
+    "You make every day a little brighter.",
+    "Small steps today, big wins ahead.",
+    "You are stronger than you know.",
+    "Today has good things waiting for you.",
+    "You've got this, one step at a time.",
+]
 
 PRINTER_CONF = {
     'IP': '192.168....',
@@ -267,11 +280,12 @@ class DataStore:
         self.sysload = {'cpu': 0, 'ram_free': 0, 'history': deque(maxlen=30)}
         self.crypto = {'btc': 0, 'eth': 0, 'btc_hist': [], 'eth_hist': []}
         self.ping = {'current': 0, 'history': deque(maxlen=50)}
+        self.affirmation = random.choice(GREETING_FALLBACK_AFFIRMATIONS)
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'gmail': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
-            'claude': 0, 'antigravity': 0, 'codex': 0
+            'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0
         }
 
 
@@ -629,6 +643,15 @@ def update_data_thread():
                 if a_data and 'current' in a_data: data_store.aqi = a_data['current'].get('european_aqi', 0)
             data_store.last_update['weather'] = now
 
+        # Slow-changing on purpose: a phrase to read over time, not something
+        # that needs to update every render like the clock does.
+        if now - data_store.last_update['affirmation'] > 900:
+            aff_data = net.get_json(API_ENDPOINTS['affirmation'], timeout=8)
+            text = aff_data.get('affirmation') if isinstance(aff_data, dict) else None
+            if isinstance(text, str) and text.strip():
+                with data_store.lock: data_store.affirmation = text.strip()
+            data_store.last_update['affirmation'] = now
+
         if ENABLE_STRAVA:
             if now - data_store.last_update['strava'] > 900:
                 s_data = fetch_strava_data()
@@ -869,6 +892,61 @@ def draw_mixed_text(draw, x, y_center, segments, fill=0):
     return cur_x - x
 
 
+def _break_oversized_word(draw, word, font, max_width):
+    """Hard-split a single word that's wider than max_width on its own into
+    character chunks that each fit — a normal word never hits this, but
+    third-party API text is otherwise unbounded."""
+    if text_width(draw, word, font) <= max_width:
+        return [word]
+    chunks = []
+    cur = ""
+    for ch in word:
+        candidate = cur + ch
+        if cur and text_width(draw, candidate, font) > max_width:
+            chunks.append(cur)
+            cur = ch
+        else:
+            cur = candidate
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def wrap_text(draw, text, font, max_width):
+    """Greedily word-wrap `text` into lines that each fit within max_width
+    pixels (measured, not char-counted — fonts aren't monospace)."""
+    words = []
+    for word in text.split():
+        words.extend(_break_oversized_word(draw, word, font, max_width))
+    lines = []
+    cur = ""
+    for word in words:
+        candidate = f"{cur} {word}".strip()
+        if cur and text_width(draw, candidate, font) > max_width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = candidate
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def wrap_lines_limited(draw, text, font, max_width, max_lines):
+    """wrap_text(), but capped at max_lines — text that doesn't fit even
+    then has its last line trimmed word-by-word and ellipsised, so an
+    API response of unpredictable length can never overflow the widget."""
+    lines = wrap_text(draw, text, font, max_width)
+    if len(lines) <= max_lines:
+        return lines
+    lines = lines[:max_lines]
+    last = lines[-1]
+    while last and text_width(draw, f"{last} …", font) > max_width:
+        last = " ".join(last.split()[:-1])
+    lines[-1] = f"{last} …" if last else "…"
+    return lines
+
+
 def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
     icon = get_cached_icon(name, size, is_white)
     if icon:
@@ -935,6 +1013,7 @@ def render_screen(epd, fonts):
         sysload = data_store.sysload.copy()
         crypto = data_store.crypto.copy()
         ping = data_store.ping.copy()
+        affirmation = data_store.affirmation
     finally:
         data_store.lock.release()
 
@@ -1273,8 +1352,12 @@ def render_screen(epd, fonts):
         gw = sum(text_width(draw, t, f) for t, f in segments)
         draw_mixed_text(draw, col3_x + max(0, (widget_w - gw) / 2), gr_y + 45, segments)
 
-        lw = text_width(draw, GREETING_LOREM, fonts['14'])
-        draw.text((col3_x + max(0, (widget_w - lw) / 2), gr_y + 90), GREETING_LOREM, font=fonts['14'], fill=0)
+        # affirmation is API-sourced text of unpredictable length (unlike
+        # every other string in this widget) — wrap_lines_limited() keeps it
+        # from ever overflowing the widget regardless of what comes back.
+        for i, line in enumerate(wrap_lines_limited(draw, affirmation, fonts['14'], widget_w, max_lines=2)):
+            lw = text_width(draw, line, fonts['14'])
+            draw.text((col3_x + max(0, (widget_w - lw) / 2), gr_y + 90 + i * 18), line, font=fonts['14'], fill=0)
 
     draw.line((col3_x, 380, epd.width - 20, 380), fill=0, width=2)
 

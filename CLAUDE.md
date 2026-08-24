@@ -91,10 +91,19 @@ checkout with no credentials configured already renders the fallback widgets
 (System Load, Crypto, Internet Ping, Greeting) instead of the token-gated
 ones (Strava, Bambu, Roborock, Claude/Codex/Antigravity usage, Spotify) —
 this is the project's built-in graceful-degradation design, not something
-the preview pipeline needs to special-case. Weather and the Gmail unread
-count are not behind `ENABLE_*` flags: weather is a keyless public API so it
-renders for real whenever there's network access; Gmail unread quietly stays
-at `0` when no `token.json` is present.
+the preview pipeline needs to special-case. Weather, the Gmail unread count,
+and the greeting widget's affirmation line are not behind `ENABLE_*` flags:
+weather and the affirmation (from the keyless `affirmations.dev` API) render
+for real whenever there's network access, falling back to
+`GREETING_FALLBACK_AFFIRMATIONS` if that request fails; Gmail unread quietly
+stays at `0` when no `token.json` is present.
+
+The affirmation line is API-sourced text of unpredictable length, unlike
+every other string in this widget — `wrap_lines_limited()` in `main.py`
+word-wraps it to at most 2 lines and ellipsis-truncates (hard-breaking by
+character first, if even a single "word" is wider than the widget) whatever
+doesn't fit, so a long or malformed response can never overflow into the
+divider line or the Gmail widget below it.
 
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
