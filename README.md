@@ -122,14 +122,16 @@ All widget toggles and API configurations are located at the top of the `main.py
 ### Spotify
 Uses Spotify's own Web API directly (no Last.fm, no local web server needed).
 1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app.
-   Add `http://127.0.0.1` as a Redirect URI in the app's settings (any App name/description is fine).
-   **Not** `http://localhost` — Spotify's dashboard now flags the hostname as insecure and rejects it;
-   it wants the loopback IP literal instead (`main.py`'s `SPOTIFY_REDIRECT_URI` matches this exactly).
+   Add `https://127.0.0.1` as a Redirect URI in the app's settings (any App name/description is fine).
+   Spotify's dashboard now rejects `http://localhost` (insecure hostname) and even plain
+   `http://127.0.0.1` (insecure scheme) — it currently wants exactly the `https://` IP literal above
+   (`main.py`'s `SPOTIFY_REDIRECT_URI` matches this). No real HTTPS server is needed for this to work:
+   nothing is listening there at all, so the browser's connection fails before any TLS handshake.
 2. Note the app's **Client ID** and **Client Secret**.
 3. Set `ENABLE_SPOTIFY = True` in `main.py` and run it (`python main.py` on the Pi, or
    `python render_preview.py` on Windows/dev machines — both trigger the same one-time setup).
 4. The script pauses, asks for your Client ID/Secret, then prints an authorization URL.
-   Open it in your browser, click "Agree", and you'll be redirected to a dead `http://127.0.0.1` page.
+   Open it in your browser, click "Agree", and you'll be redirected to a dead `https://127.0.0.1` page.
 5. Copy the whole URL containing `code=...` from your browser's address bar and paste it back into
    the terminal. The script fetches and saves the tokens to `spotify_token.json`, and refreshes them
    automatically in the background from then on — no further logins needed.

@@ -126,11 +126,14 @@ ROBOROCK_CONF = {
 SPOTIFY_CONF = {
     'TOKEN_FILE': os.path.join(BASE_DIR, 'spotify_token.json')
 }
-# Spotify rejects the hostname "localhost" as a redirect URI (flagged
-# "not secure" in the dashboard) — it requires the loopback IP literal
-# instead, per OAuth-for-native-apps best practice (RFC 8252). Must match
+# Spotify's dashboard rejects both the hostname "localhost" (flagged "not
+# secure") and plain http:// on the loopback IP — it currently requires
+# https://127.0.0.1 specifically. That's fine even without a real TLS
+# listener: since nothing is listening at all, the browser's connection
+# fails before any handshake, so no certificate is ever needed — the address
+# bar still shows the attempted URL with ?code=... intact. Must match
 # exactly what's registered in the Spotify Dashboard app.
-SPOTIFY_REDIRECT_URI = "http://127.0.0.1"
+SPOTIFY_REDIRECT_URI = "https://127.0.0.1"
 # Album art is fetched at this size so the dithering is computed for the
 # widget's actual display size, not upscaled afterwards (which would smear
 # an already-dithered 1-bit image).
@@ -550,9 +553,9 @@ def auth_spotify():
 
     print("\n--- SPOTIFY CONFIGURATION REQUIRED ---")
     print("Register an app at https://developer.spotify.com/dashboard first")
-    print(f"(add {SPOTIFY_REDIRECT_URI} as a Redirect URI there — Spotify")
-    print("rejects the hostname 'localhost' as insecure, so it must be the")
-    print("IP literal above, not http://localhost).\n")
+    print(f"(add {SPOTIFY_REDIRECT_URI} as a Redirect URI there — Spotify rejects")
+    print("both http://localhost and plain http://127.0.0.1 as insecure now,")
+    print("it must be exactly the https:// IP literal above).\n")
     c_id = input("Enter Spotify Client ID (or press Enter to disable): ").strip()
     if not c_id:
         print("Spotify is disabled. Fallback (Nothing Playing) will be used.\n")
