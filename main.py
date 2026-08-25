@@ -149,14 +149,15 @@ GREETING_FALLBACK_AFFIRMATIONS = [
 # edits.
 TODO_MAX_TASKS = 5
 # Placeholder content until GET /api/top-todos exists (see CLAUDE.md
-# roadmap) — a realistic mix of with/without a due time, since "due" is
-# meant to be optional per task.
+# roadmap) — a realistic mix of with/without a due time, and done/not-done,
+# since "due" is optional per task and completed tasks can still be among
+# today's top N (e.g. shown for the rest of the day as a done checkmark).
 TODO_PLACEHOLDER_TASKS = [
-    {"title": "Finish quarterly report", "due": "2:00 PM"},
-    {"title": "Buy groceries", "due": None},
-    {"title": "Call dentist", "due": "10:30 AM"},
-    {"title": "Review pull request", "due": None},
-    {"title": "Plan weekend trip", "due": "6:00 PM"},
+    {"title": "Finish quarterly report", "due": "2:00 PM", "completed": False},
+    {"title": "Buy groceries", "due": None, "completed": True},
+    {"title": "Call dentist", "due": "10:30 AM", "completed": True},
+    {"title": "Review pull request", "due": None, "completed": False},
+    {"title": "Plan weekend trip", "due": "6:00 PM", "completed": False},
 ]
 
 PRINTER_CONF = {
@@ -1532,7 +1533,17 @@ def render_screen(epd, fonts):
         for i in range(TODO_MAX_TASKS):
             row_y = row_top + i * row_h
             cb_y = row_y + 4
-            draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
+            completed = i < len(todos) and todos[i].get('completed', False)
+
+            if completed:
+                # Filled box + a light checkmark cut into it, rather than an
+                # outline — reads as "done" at a glance, matching the
+                # strikethrough on the title below.
+                draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), fill=0)
+                draw.line((col1_x + 3, cb_y + 8, col1_x + 6, cb_y + 12), fill=255, width=2)
+                draw.line((col1_x + 6, cb_y + 12, col1_x + 13, cb_y + 3), fill=255, width=2)
+            else:
+                draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
 
             if i < len(todos):
                 task = todos[i]
@@ -1543,6 +1554,11 @@ def render_screen(epd, fonts):
                 title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
                 title = title[0] if title else ''
                 draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
+                if completed and title:
+                    tw = text_width(draw, title, fonts['24'])
+                    bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
+                    strike_y = (bbox[1] + bbox[3]) / 2
+                    draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
 
                 due = task.get('due')
                 if due:

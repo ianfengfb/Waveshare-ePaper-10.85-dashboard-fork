@@ -160,8 +160,20 @@ real tasks just leave empty checkbox rows rather than resizing the rows, so
 the layout doesn't jump around as the count changes day to day. Row height
 is computed from `TODO_MAX_TASKS` rather than hardcoded, so changing the
 constant needs no other edits. `data_store.todos` is a list of
-`{"title": str, "due": str | None}` dicts — `TODO_PLACEHOLDER_TASKS` seeds
-it until the roadmap's `GET /api/top-todos` fetch is wired in (see above).
+`{"title": str, "due": str | None, "completed": bool}` dicts —
+`TODO_PLACEHOLDER_TASKS` seeds it until the roadmap's `GET /api/top-todos`
+fetch is wired in (see above); a completed task can still legitimately be
+among today's top N (e.g. shown done for the rest of the day), so the
+placeholder data deliberately mixes completed and not.
+
+A completed task draws a filled checkbox (rather than the default outline)
+with a light checkmark cut into it via two white lines, plus a strikethrough
+through the title — both cues together rather than either alone, since a
+filled checkbox alone doesn't read as "done" at e-ink's low contrast and a
+strikethrough alone is easy to miss at a glance. The strikethrough's y
+position comes from the title's own `draw.textbbox()` vertical centre
+rather than a fixed offset, so it lands correctly regardless of which font
+metrics the title text ends up using.
 
 Task titles and due-time strings are external text like the affirmation
 line and Spotify's artist/track fields — `wrap_lines_limited(..., max_lines=1)`
@@ -324,8 +336,8 @@ until asked:
    `GET /api/top-todos` from the companion app above and populate
    `data_store.todos`, replacing `TODO_PLACEHOLDER_TASKS`. Same shared-secret
    header and fetch → parse → fallback pattern as every other widget — each
-   task dict should keep the `{"title": ..., "due": ...}` shape (`due`
-   nullable) the draw code already expects.
+   task dict should keep the `{"title": ..., "due": ..., "completed": ...}`
+   shape (`due` nullable) the draw code already expects.
 2. **Remote widget config via `/api/widget-config`** — right now
    `EMAIL_PROVIDER` (and every `ENABLE_*` flag) is a local edit-and-redeploy
    constant. Once the companion app exists, have `update_data_thread` poll
