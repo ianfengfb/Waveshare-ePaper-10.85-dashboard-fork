@@ -18,7 +18,7 @@ import math
 import random
 import urllib.parse
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance
 from logging.handlers import RotatingFileHandler
 
@@ -61,6 +61,11 @@ ENABLE_SPOTIFY = False
 # is False. Kept as a toggle (not deleted) so weather can come back on this
 # or another slot later — see CLAUDE.md roadmap.
 ENABLE_WEATHER = False
+# Only gates auth_gmail()'s interactive one-time prompt (so a fresh checkout
+# never blocks on input()). The Gmail widget itself is unconditional and
+# always visible — update_data_thread's fetch already self-gates on whether
+# token.json exists, same as before this flag existed.
+ENABLE_GMAIL = False
 
 # --- API ENDPOINTS ---
 API_ENDPOINTS = {
@@ -74,6 +79,8 @@ API_ENDPOINTS = {
     'spotify_auth': 'https://accounts.spotify.com/authorize',
     'spotify_token': 'https://accounts.spotify.com/api/token',
     'spotify_player': 'https://api.spotify.com/v1/me/player/currently-playing',
+    'gmail_auth': 'https://accounts.google.com/o/oauth2/v2/auth',
+    'gmail_token': 'https://oauth2.googleapis.com/token',
     'affirmation': 'https://www.affirmations.dev',
 }
 
@@ -148,6 +155,11 @@ GMAIL_TOKEN_PATH = os.path.join(BASE_DIR, 'token.json')
 ROBOROCK_TOKEN_FILE = os.path.join(BASE_DIR, 'roborock_session.pkl')
 ROBOROCK_STATS_FILE = os.path.join(BASE_DIR, 'roborock_stats.json')
 GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+# Unlike Spotify, Google's "Desktop app" OAuth client type doesn't require
+# pre-registering a redirect URI at all — it auto-accepts loopback addresses,
+# and plain http:// (not https://) is fine here since that's exactly what
+# Google's own InstalledAppFlow.run_local_server() helper uses internally.
+GMAIL_REDIRECT_URI = "http://127.0.0.1"
 
 if os.path.exists(LIB_DIR):
     sys.path.append(LIB_DIR)
@@ -705,6 +717,90 @@ def fetch_spotify_data():
             cover_dithered = img_pil.convert("1", dither=Image.NONE)
 
     return {'status': 'PLAYING', 'text': f"{artist} - {track_name}", 'cover': cover_dithered}
+
+
+def auth_gmail():
+    if not ENABLE_GMAIL: return
+
+    if os.path.exists(GMAIL_TOKEN_PATH):
+        return
+
+    print("\n--- GMAIL CONFIGURATION REQUIRED ---")
+    print("Create an OAuth Client ID (type: Desktop app) at")
+    print("https://console.cloud.google.com/apis/credentials first —")
+    print("enable the Gmail API on that project if you haven't already.\n")
+    c_id = input("Enter Google Client ID (or press Enter to disable): ").strip()
+    if not c_id:
+        print("Gmail is disabled. Unread count will stay at 0.\n")
+        return
+
+    c_secret = input("Enter Google Client Secret: ").strip()
+
+    auth_url = (
+        f"{API_ENDPOINTS['gmail_auth']}?"
+        f"client_id={c_id}&"
+        f"response_type=code&"
+        f"redirect_uri={urllib.parse.quote(GMAIL_REDIRECT_URI, safe='')}&"
+        f"scope={urllib.parse.quote(' '.join(GMAIL_SCOPES), safe='')}&"
+        f"access_type=offline&"
+        f"prompt=consent"
+    )
+
+    print("\n[!] To authorize, open this link in your browser:\n")
+    print(f"--> {auth_url} <--\n")
+    print(f"Click 'Allow'. You will be redirected to an empty/error page ({GMAIL_REDIRECT_URI}).")
+    print("Look at the address bar. Copy the 'code' parameter.")
+
+    code_input = input("Enter the 'code' from the URL (or paste the full URL): ").strip()
+
+    if not code_input:
+        print("Authorization cancelled. Unread count will stay at 0.\n")
+        return
+
+    if 'code=' in code_input:
+        try:
+            parsed = urllib.parse.urlparse(code_input)
+            params = urllib.parse.parse_qs(parsed.query)
+            code = params.get('code', [code_input])[0]
+        except:
+            code = code_input.split('code=')[1].split('&')[0]
+    else:
+        code = code_input
+
+    print("Fetching Access Token...")
+    data = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': GMAIL_REDIRECT_URI,
+        'client_id': c_id,
+        'client_secret': c_secret,
+    }
+
+    try:
+        resp = requests.post(API_ENDPOINTS['gmail_token'], data=data)
+        resp.raise_for_status()
+        token_data = resp.json()
+
+        # Build via Credentials + to_json() rather than hand-writing the
+        # JSON, so the file's shape/date-format is guaranteed to match what
+        # Credentials.from_authorized_user_file() (used by the fetch code
+        # below) expects — it's the exact same round-trip that code already
+        # does on every token refresh.
+        creds = Credentials(
+            token=token_data['access_token'],
+            refresh_token=token_data.get('refresh_token'),
+            token_uri=API_ENDPOINTS['gmail_token'],
+            client_id=c_id,
+            client_secret=c_secret,
+            scopes=GMAIL_SCOPES,
+        )
+        creds.expiry = datetime.utcnow() + timedelta(seconds=token_data.get('expires_in', 3600))
+
+        with open(GMAIL_TOKEN_PATH, 'w') as f:
+            f.write(creds.to_json())
+        print("Gmail Authorization Successful!\n")
+    except Exception as e:
+        print(f"Failed to fetch Gmail tokens: {e}")
 
 
 def auth_roborock(email):
@@ -1577,6 +1673,7 @@ def load_fonts():
 def main():
     auth_strava()
     auth_spotify()
+    auth_gmail()
     auth_claude()
     auth_antigravity()
     auth_codex()

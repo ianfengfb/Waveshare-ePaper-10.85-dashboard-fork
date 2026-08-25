@@ -137,11 +137,17 @@ Uses Spotify's own Web API directly (no Last.fm, no local web server needed).
    automatically in the background from then on — no further logins needed.
 
 ### Gmail
-1. Go to the Google Cloud Console.
-2. Create a new project and enable the **Gmail API**.
-3. Create OAuth 2.0 Client ID credentials (choose "Desktop Application" as the application type).
-4. Download the generated JSON file, rename it exactly to `credentials.json` (if your setup requires it, or just use `token.json` generation), and place it in the same directory as the script.
-5. On the first run, the script will open a browser window (or provide a link) for you to log in and grant read-only access. It will generate a `token.json` file for all future headless authentications.
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create a project
+   (or use an existing one), and enable the **Gmail API** for it.
+2. Create an OAuth Client ID credential, type **Desktop app**. Note the **Client ID** and **Client Secret**
+   shown — no file download or redirect URI setup needed for this credential type.
+3. Set `ENABLE_GMAIL = True` in `main.py` and run it (`python main.py` on the Pi, or
+   `python render_preview.py` on Windows/dev machines — both trigger the same one-time setup).
+4. The script pauses, asks for your Client ID/Secret, then prints an authorization URL.
+   Open it in your browser, click "Allow", and you'll be redirected to a dead `http://127.0.0.1` page.
+5. Copy the whole URL containing `code=...` from your browser's address bar and paste it back into
+   the terminal. The script fetches and saves the tokens to `token.json`, and refreshes them
+   automatically in the background from then on — no further logins needed.
 
 ---
 

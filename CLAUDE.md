@@ -96,7 +96,14 @@ and the greeting widget's affirmation line are not behind `ENABLE_*` flags:
 weather and the affirmation (from the keyless `affirmations.dev` API) render
 for real whenever there's network access, falling back to
 `GREETING_FALLBACK_AFFIRMATIONS` if that request fails; Gmail unread quietly
-stays at `0` when no `token.json` is present.
+stays at `0` when no `token.json` is present. `ENABLE_GMAIL` exists only to
+gate `auth_gmail()`'s interactive one-time OAuth prompt (so a fresh checkout
+never blocks on `input()`) — the ongoing fetch in `update_data_thread` is
+unconditional and keeps self-gating on `token.json`'s presence, unchanged
+from before that flag existed. Same one-time-authorize-then-refresh-forever
+pattern as `auth_strava()`/`auth_spotify()`, using Google's
+`Credentials`/`to_json()` (already imported for the existing refresh logic)
+to build `token.json` rather than hand-writing its JSON shape.
 
 The affirmation line is API-sourced text of unpredictable length, unlike
 every other string in this widget — `wrap_lines_limited()` in `main.py`
