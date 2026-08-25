@@ -1625,56 +1625,72 @@ def render_screen(epd, fonts):
         draw.text((col1_x + 45, 15), "TASKS OF THE DAY", font=fonts['28'], fill=0)
         draw.line((col1_x, 60, col1_x + content_w, 60), fill=0, width=2)
 
-        row_top, row_bottom = 75, 460
-        row_h = (row_bottom - row_top) / TODO_MAX_TASKS
-        checkbox_size = 16
-        # Wide enough for "HH:MM AM/PM" (measured ~94px at fonts['20']) with
-        # a small margin — not just a round number, since that string is
-        # wider than it looks.
-        due_col_w = 100
-        title_x = col1_x + checkbox_size + 8
-        title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
+        if not todos:
+            # Placeholder — no tasks today, or the fetch hasn't populated
+            # data_store.todos yet (fresh boot, or the companion app
+            # unreachable). Same "icon plus centred message" shape as
+            # Spotify's "Nothing Playing" and the weather placeholder, so an
+            # empty/failed fetch degrades gracefully instead of leaving the
+            # column as a grid of empty checkboxes with no explanation.
+            icon_size = 100
+            icon_x = col1_x + max(0, (content_w - icon_size) / 2)
+            icon_y = 220
+            draw_icon(draw, int(icon_x), icon_y, "icon_task", (icon_size, icon_size))
+            msg = "No Tasks Today"
+            mw = text_width(draw, msg, fonts['28'])
+            draw.text((col1_x + max(0, (content_w - mw) / 2), icon_y + icon_size + 30), msg, font=fonts['28'], fill=0)
 
-        for i in range(TODO_MAX_TASKS):
-            row_y = row_top + i * row_h
-            cb_y = row_y + 4
-            completed = i < len(todos) and todos[i].get('completed', False)
+        else:
+            row_top, row_bottom = 75, 460
+            row_h = (row_bottom - row_top) / TODO_MAX_TASKS
+            checkbox_size = 16
+            # Wide enough for "HH:MM AM/PM" (measured ~94px at fonts['20']) with
+            # a small margin — not just a round number, since that string is
+            # wider than it looks.
+            due_col_w = 100
+            title_x = col1_x + checkbox_size + 8
+            title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
 
-            if completed:
-                # Filled box + a light checkmark cut into it, rather than an
-                # outline — reads as "done" at a glance, matching the
-                # strikethrough on the title below.
-                draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), fill=0)
-                draw.line((col1_x + 3, cb_y + 8, col1_x + 6, cb_y + 12), fill=255, width=2)
-                draw.line((col1_x + 6, cb_y + 12, col1_x + 13, cb_y + 3), fill=255, width=2)
-            else:
-                draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
+            for i in range(TODO_MAX_TASKS):
+                row_y = row_top + i * row_h
+                cb_y = row_y + 4
+                completed = i < len(todos) and todos[i].get('completed', False)
 
-            if i < len(todos):
-                task = todos[i]
-                # Task titles will eventually be arbitrary text from the
-                # companion app's API — same "unpredictable external text"
-                # category as artist/track names and the affirmation line,
-                # so truncate in pixels rather than assume they fit.
-                title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
-                title = title[0] if title else ''
-                draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
-                if completed and title:
-                    tw = text_width(draw, title, fonts['24'])
-                    bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
-                    strike_y = (bbox[1] + bbox[3]) / 2
-                    draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
+                if completed:
+                    # Filled box + a light checkmark cut into it, rather than an
+                    # outline — reads as "done" at a glance, matching the
+                    # strikethrough on the title below.
+                    draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), fill=0)
+                    draw.line((col1_x + 3, cb_y + 8, col1_x + 6, cb_y + 12), fill=255, width=2)
+                    draw.line((col1_x + 6, cb_y + 12, col1_x + 13, cb_y + 3), fill=255, width=2)
+                else:
+                    draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
 
-                due = task.get('due')
-                if due:
-                    due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
-                    due_text = due_line[0] if due_line else ''
-                    dw = text_width(draw, due_text, fonts['20'])
-                    draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
+                if i < len(todos):
+                    task = todos[i]
+                    # Task titles will eventually be arbitrary text from the
+                    # companion app's API — same "unpredictable external text"
+                    # category as artist/track names and the affirmation line,
+                    # so truncate in pixels rather than assume they fit.
+                    title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
+                    title = title[0] if title else ''
+                    draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
+                    if completed and title:
+                        tw = text_width(draw, title, fonts['24'])
+                        bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
+                        strike_y = (bbox[1] + bbox[3]) / 2
+                        draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
 
-            if i < TODO_MAX_TASKS - 1:
-                sep_y = row_y + row_h - 6
-                draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
+                    due = task.get('due')
+                    if due:
+                        due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
+                        due_text = due_line[0] if due_line else ''
+                        dw = text_width(draw, due_text, fonts['20'])
+                        draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
+
+                if i < TODO_MAX_TASKS - 1:
+                    sep_y = row_y + row_h - 6
+                    draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
 
     else:
         # Widget 1: Strava or SysLoad

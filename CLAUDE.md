@@ -182,6 +182,15 @@ same helper, same reasoning. The due-time column budget (100px) is sized
 off measuring a real "HH:MM AM/PM" string (~94px at `fonts['20']`), not a
 round number — an untested guess here undercounted it once already.
 
+**Empty/fetch-failed placeholder**: when `data_store.todos` is empty
+(genuinely no tasks today, or the fetch hasn't populated it yet), the
+column shows a centred `icon_task` plus "No Tasks Today" instead of a grid
+of empty checkbox rows — same "icon plus centred message" shape as
+Spotify's "Nothing Playing" and the weather placeholder. Doesn't
+distinguish "no tasks" from "fetch failed", same as those two — a
+missing/dead fetch degrades to the same placeholder rather than a special
+error state.
+
 ### Middle column: Spotify or Weather, switchable via MIDDLE_COLUMN_WIDGET
 
 `MIDDLE_COLUMN_WIDGET = "spotify"` by default (`"spotify"` | `"weather"`) —
