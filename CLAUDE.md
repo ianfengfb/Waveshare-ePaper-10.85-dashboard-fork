@@ -276,14 +276,17 @@ one redraw cycle rather than exactly 60.00s. Acceptable for a low-stakes
 encouragement widget; not worth extra redraws (and extra e-ink wear) to
 tighten.
 
-**Growth is calendar-month cumulative, not daily.** A realistic 3-4
-logs/day would never fill a tree within 24h, and resetting to a seed every
-morning would undercut the "watch it grow" reward — so `data_store.water`
-carries a running month total (`total_litres_month`) that the companion app
-computes server-side (D1 query over the calendar month), not something the
-Pi derives itself. The Pi only ever divides that total by
-`WATER_GROWTH_TARGET_LITRES` (currently 60L/month) to get a 0.0-1.0 growth
-fraction — no date math on this side at all.
+**Growth resets on completion, not on a calendar timer.** `data_store.water`
+carries `progress_litres` — a running total since the last time a plant
+was completed — that the companion app computes and resets server-side
+(not something the Pi derives itself): once it reaches
+`WATER_GROWTH_TARGET_LITRES` (40L), the app zeroes it and bumps
+`plants_grown_lifetime`, however long that took. No calendar binding at
+all — a slow week doesn't lose progress the way a monthly reset would,
+and a fast one doesn't have to wait for the calendar to catch up. The Pi
+only ever divides `progress_litres` by `WATER_GROWTH_TARGET_LITRES` to get
+a 0.0-1.0 growth fraction — no date math on this side, same as before.
+At 0.5L per logged step, 40L is 80 distinct steps from seed to full growth.
 
 **The plant is drawn procedurally (`draw_growth_plant()`), not as a set of
 stage bitmaps.** A single growth fraction continuously scales the pot's
@@ -304,33 +307,35 @@ disc inside it) sits under the stem regardless of growth. The stem and
 canopy never fully disappear even at t=0 — a very short stem with just 2
 tiny leaves reads as a sprout rather than an empty pot, per the "starts
 with a sprout, not nothing" requirement. Both canopy radius and leaf count
-scale with `t` (leaf count 2→46 by default), so a month's worth of
-individually-small litre increments still each nudge the canopy's spacing
-or leaf count by a visible amount, rather than only a few discrete jumps
-being visible across the whole month.
+scale with `t` (leaf count 2→46 by default), so each 0.5L logged step
+still nudges the canopy's spacing or leaf count by a visible amount across
+all 80 steps, rather than only a few discrete jumps being visible over the
+whole growth cycle.
 
-`data_store.water` defaults to `{'total_litres_month': 0.0,
+`data_store.water` defaults to `{'progress_litres': 0.0,
 'last_logged_at': None, 'last_amount_litres': None,
 'plants_grown_lifetime': 0}` — `last_logged_at: None` always keeps
 `show_water` false, so a fresh checkout (or before the companion app's
 water endpoint is wired in) never shows the widget, same
 degrade-to-safe-default convention as every other credentialed/unwired
-widget in this file. `icons/icon_droplet.bmp` is a hand-drawn bold water
-drop (no existing icon fit "hydration"), made the same way as
-`icons/icon_task.bmp` — a filled ellipse plus a triangular tip, rendered at
-10x scale and downsampled for anti-aliasing, matching the bold/filled style
-of the rest of the icon set.
+widget in this file. Since there's no calendar window to label the total
+against any more, the widget shows progress against the fixed target
+instead of a bare total (e.g. "21.0 / 40 L grown"). `icons/icon_droplet.bmp`
+is a hand-drawn bold water drop (no existing icon fit "hydration"), made
+the same way as `icons/icon_task.bmp` — a filled ellipse plus a triangular
+tip, rendered at 10x scale and downsampled for anti-aliasing, matching the
+bold/filled style of the rest of the icon set.
 
 **Lifetime badge**: a small mini-plant icon (`icons/icon_plant_grown.bmp`
 — a scaled-down one-shot render of the same pot/stem/canopy shapes
 `draw_growth_plant()` draws, not a separate design) plus `"x N"` in the
 content area's top-left corner, showing `plants_grown_lifetime` — how many
-times she's grown a plant to full (`total_litres_month` reaching
-`WATER_GROWTH_TARGET_LITRES`) across all months, not just the current one.
-A distinct icon from the header's droplet so it reads as its own "trophy
-count" rather than a second copy of the header at a glance. The companion
-app computes this count server-side, same as the month total — the Pi only
-displays it.
+times she's grown a plant to full (`progress_litres` reaching
+`WATER_GROWTH_TARGET_LITRES`) across all time, not just the current growth
+cycle. A distinct icon from the header's droplet so it reads as its own
+"trophy count" rather than a second copy of the header at a glance. The
+companion app computes this count server-side, same as `progress_litres`
+itself — the Pi only displays it.
 
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
@@ -454,22 +459,25 @@ until asked:
    widget. Proposed shape:
    ```json
    {
-     "total_litres_month": 21.0, "last_logged_at": "2026-08-25T14:32:00Z",
-     "last_amount_litres": 1.0, "plants_grown_lifetime": 4
+     "progress_litres": 21.0, "last_logged_at": "2026-08-25T14:32:00Z",
+     "last_amount_litres": 0.5, "plants_grown_lifetime": 4
    }
    ```
-   `total_litres_month` should already be the calendar-month running total
-   computed server-side (a D1 query), not raw log rows — the Pi does no
-   date math, it only divides by `WATER_GROWTH_TARGET_LITRES`.
-   `last_logged_at` should be stamped server-side when the log is inserted
-   (not client-supplied), so device clock drift on whatever she logs from
-   can't fool the "was this within the last minute" check. On the Pi side,
-   convert it to a Unix timestamp for `data_store.water['last_logged_at']`
-   — that's what `show_water`'s `time.time() - ...` comparison expects.
-   `plants_grown_lifetime` is a running count of completed months (i.e. how
-   many times `total_litres_month` has reached `WATER_GROWTH_TARGET_LITRES`
-   across all months, not just the current one) — also computed
-   server-side; the Pi only displays it via the widget's lifetime badge.
+   `progress_litres` should already be the running total since the last
+   completed plant, computed and reset server-side — not raw log rows, and
+   not bound to any calendar window. Once it reaches
+   `WATER_GROWTH_TARGET_LITRES` (40L), the companion app should reset it to
+   0 and increment `plants_grown_lifetime`, however long that took; the Pi
+   does no date math and no reset logic, it only divides by
+   `WATER_GROWTH_TARGET_LITRES`. `last_logged_at` should be stamped
+   server-side when the log is inserted (not client-supplied), so device
+   clock drift on whatever she logs from can't fool the "was this within
+   the last minute" check. On the Pi side, convert it to a Unix timestamp
+   for `data_store.water['last_logged_at']` — that's what `show_water`'s
+   `time.time() - ...` comparison expects. `plants_grown_lifetime` is a
+   running count of completed plants across all time (not just the
+   current growth cycle) — also computed server-side; the Pi only displays
+   it via the widget's lifetime badge.
 
 ## Conventions
 

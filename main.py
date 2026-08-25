@@ -168,12 +168,18 @@ TODO_PLACEHOLDER_TASKS = [
 ]
 
 # --- HYDRATION / GROWTH WIDGET ---
-# Growth is calendar-month cumulative, not daily — a handful of logs a day
-# realistically won't fill a tree within 24h, and resetting to a seed every
-# morning would work against the "watch it grow" reward. The companion app
-# computes the running month total server-side (see CLAUDE.md roadmap); the
+# Growth is a running total since the last completed plant, not a calendar
+# window — there's no monthly (or any other) reset on a timer. Once the
+# total reaches WATER_GROWTH_TARGET_LITRES, the companion app resets it to
+# 0 and bumps plants_grown_lifetime, however long that took; a slow week
+# doesn't lose progress the way a calendar-month reset would. The companion
+# app computes this running total server-side (see CLAUDE.md roadmap); the
 # Pi only ever displays whatever total it's given, no date math here.
-WATER_GROWTH_TARGET_LITRES = 60.0  # litres logged this month for a fully-grown tree
+# 40L at 0.5L per logged step gives 80 distinct steps from seed to full
+# growth — plenty of resolution for a plant meant to take a while to grow,
+# though the drawing itself scales continuously off the fraction rather
+# than switching between 80 discrete images.
+WATER_GROWTH_TARGET_LITRES = 40.0  # litres for a fully-grown plant
 # How long the widget stays up after a fresh log before reverting to
 # Spotify. Deliberately matched to main()'s existing ~60s screen-redraw
 # cadence rather than a dedicated timer/thread: each redraw just checks
@@ -399,12 +405,13 @@ class DataStore:
         # last_logged_at is a Unix timestamp (seconds); None means "no log
         # seen yet", which always keeps the widget hidden — a safe default
         # until GET /api/water-status is wired in (see CLAUDE.md roadmap).
-        # plants_grown_lifetime is a running count of completed months (i.e.
-        # how many times total_litres_month has reached
-        # WATER_GROWTH_TARGET_LITRES) — computed server-side, same as the
-        # month total itself.
+        # progress_litres resets to 0 whenever it reaches
+        # WATER_GROWTH_TARGET_LITRES, however long that took — not tied to
+        # a calendar month. plants_grown_lifetime is a running count of how
+        # many times that's happened across all time — computed
+        # server-side, same as progress_litres itself.
         self.water = {
-            'total_litres_month': 0.0, 'last_logged_at': None,
+            'progress_litres': 0.0, 'last_logged_at': None,
             'last_amount_litres': None, 'plants_grown_lifetime': 0
         }
 
@@ -1492,12 +1499,13 @@ def draw_growth_plant(draw, cx, ground_y, growth_fraction):
     canopy, driven by a single 0.0-1.0 fraction — pot is fixed, but stem
     height/width and canopy radius/leaf size/leaf count all scale
     continuously from it, rather than switching between a handful of
-    discrete stage images. That also means (deliberately) every litre
-    nudges the canopy's leaf count and/or spacing by a little, since a
-    month's worth of small daily logs needs far more visibly-distinct
-    steps than a few discrete growth stages could give it. Needs no extra
-    art assets, matching how the rest of the dashboard draws things
-    (sparklines, checkboxes) instead of importing icons for everything."""
+    discrete stage images. That also means (deliberately) every half-litre
+    step nudges the canopy's leaf count and/or spacing by a little, since
+    80 logged steps from seed to full growth needs far more
+    visibly-distinct steps than a few discrete growth stages could give
+    it. Needs no extra art assets, matching how the rest of the dashboard
+    draws things (sparklines, checkboxes) instead of importing icons for
+    everything."""
     t = max(0.0, min(1.0, growth_fraction))
 
     # Pot: solid trapezoid body (matches the bold/filled style of the rest
@@ -1925,10 +1933,11 @@ def render_screen(epd, fonts):
             draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
 
             # Lifetime badge — how many times she's grown a plant to full
-            # (i.e. hit WATER_GROWTH_TARGET_LITRES) across all months, not
-            # just this one. A small mini-plant icon rather than the same
-            # droplet as the header, so it reads as a distinct "trophy
-            # count" at a glance instead of a second copy of the header.
+            # (i.e. hit WATER_GROWTH_TARGET_LITRES) across all time, not
+            # just the current one. A small mini-plant icon rather than the
+            # same droplet as the header, so it reads as a distinct
+            # "trophy count" at a glance instead of a second copy of the
+            # header.
             badge_size = 26
             draw_icon(draw, col2_x, 94, "icon_plant_grown", (badge_size, badge_size))
             lifetime_count = water.get('plants_grown_lifetime', 0)
@@ -1937,11 +1946,14 @@ def render_screen(epd, fonts):
             content_w = col_w - 40
             cx = col2_x + content_w / 2
             ground_y = 415
-            total_month = water.get('total_litres_month', 0.0)
-            growth_fraction = total_month / WATER_GROWTH_TARGET_LITRES
+            progress_litres = water.get('progress_litres', 0.0)
+            growth_fraction = progress_litres / WATER_GROWTH_TARGET_LITRES
             draw_growth_plant(draw, cx, ground_y, growth_fraction)
 
-            total_text = f"{total_month:.1f} L this month"
+            # No calendar window to anchor the label to any more (growth
+            # just resets on completion, whenever that happens), so show
+            # progress against the fixed target instead of a bare total.
+            total_text = f"{progress_litres:.1f} / {WATER_GROWTH_TARGET_LITRES:.0f} L grown"
             tw = text_width(draw, total_text, fonts['28'])
             draw.text((col2_x + max(0, (content_w - tw) / 2), ground_y + 15), total_text, font=fonts['28'], fill=0)
 
