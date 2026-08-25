@@ -114,10 +114,22 @@ rather than fighting over the same column-3 slot they originally shared.
 Weather's drawing code is untouched, just gated behind the flag, so flipping
 it back to `True` restores it on this slot. `SPOTIFY_ART_SIZE` (currently
 190px) controls the album-art fetch/display size in one place — the fetch
-code (`update_data_thread`) resizes to this before dithering, since
+code (`fetch_spotify_data()`) resizes to this before dithering, since
 upscaling an already-dithered 1-bit image afterwards would smear it.
 
-Artist/track names come from Last.fm, same "unpredictable external text"
+Uses Spotify's own Web API (`/v1/me/player/currently-playing`), not
+Last.fm — see `auth_spotify()`/`fetch_spotify_data()`. One-time OAuth via
+the same `redirect_uri=http://localhost` + copy-the-code-from-the-dead-page
+trick `auth_strava()` already used, then a `refresh_token` renews access
+tokens indefinitely with no further browser interaction. `fetch_spotify_data()`
+makes its own request rather than using `net.get_json()`, because Spotify
+returns HTTP 204 (empty body, not an error) when nothing is playing —
+`get_json()`'s `resp.json()` call would turn that into a swallowed exception
+indistinguishable from a real failure, and unlike a real failure "nothing
+playing" must still update the widget (otherwise pausing would leave stale
+"still playing" text on screen indefinitely).
+
+Artist/track names are external (Spotify) text, same "unpredictable width"
 category as the affirmation line — a plain `[:N]` character slice can still
 overflow the column if the text happens to be wide characters, so the
 widget reuses `wrap_lines_limited(..., max_lines=1)` to pixel-measure and
@@ -182,9 +194,9 @@ until asked:
    automation POSTs the daily total to a small Flask receiver running on the
    Pi's LAN; the dashboard reads the stored value. (Strava is the fallback
    if this route isn't worth building.)
-4. **Spotify now-playing** is already implemented upstream via Last.fm
-   (`LASTFM_CONF`) and now lives in the middle column (replacing Weather,
-   see above) — no work needed on the widget itself.
+4. **Spotify now-playing** is already implemented via Spotify's own Web API
+   (`SPOTIFY_CONF`, see above) and lives in the middle column (replacing
+   Weather) — no work needed on the widget itself.
 5. **More middle-column widgets**: the Spotify widget doesn't fill the
    whole column, and weather's slot is otherwise idle now. Candidates for
    filling the remaining space, not yet scoped: a compact weather summary,

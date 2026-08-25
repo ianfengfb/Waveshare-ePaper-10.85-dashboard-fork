@@ -71,7 +71,9 @@ API_ENDPOINTS = {
     'strava_activities': 'https://www.strava.com/api/v3/athlete/activities',
     'btc': 'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart',
     'eth': 'https://api.coingecko.com/api/v3/coins/ethereum/market_chart',
-    'lastfm': 'http://ws.audioscrobbler.com/2.0/',
+    'spotify_auth': 'https://accounts.spotify.com/authorize',
+    'spotify_token': 'https://accounts.spotify.com/api/token',
+    'spotify_player': 'https://api.spotify.com/v1/me/player/currently-playing',
     'affirmation': 'https://www.affirmations.dev',
 }
 
@@ -118,9 +120,11 @@ ROBOROCK_CONF = {
     'EMAIL': 'your@email.com'
 }
 
-LASTFM_CONF = {
-    'API_KEY': '...',
-    'USERNAME': 'your_name'
+# Client ID/secret are entered once interactively (auth_spotify()) and
+# persisted alongside the tokens in TOKEN_FILE, the same pattern STRAVA_CONF
+# below uses — nothing to fill in here.
+SPOTIFY_CONF = {
+    'TOKEN_FILE': os.path.join(BASE_DIR, 'spotify_token.json')
 }
 # Album art is fetched at this size so the dithering is computed for the
 # widget's actual display size, not upscaled afterwards (which would smear
@@ -532,6 +536,168 @@ def fetch_strava_data():
     }
 
 
+def auth_spotify():
+    global ENABLE_SPOTIFY
+    if not ENABLE_SPOTIFY: return
+
+    if os.path.exists(SPOTIFY_CONF['TOKEN_FILE']):
+        return
+
+    print("\n--- SPOTIFY CONFIGURATION REQUIRED ---")
+    print("Register an app at https://developer.spotify.com/dashboard first")
+    print("(any values are fine for the redirect URI field except it must be")
+    print("exactly http://localhost — add that as a Redirect URI there).\n")
+    c_id = input("Enter Spotify Client ID (or press Enter to disable): ").strip()
+    if not c_id:
+        print("Spotify is disabled. Fallback (Nothing Playing) will be used.\n")
+        ENABLE_SPOTIFY = False
+        return
+
+    c_secret = input("Enter Spotify Client Secret: ").strip()
+
+    auth_url = (
+        f"{API_ENDPOINTS['spotify_auth']}?"
+        f"client_id={c_id}&"
+        f"response_type=code&"
+        f"redirect_uri=http://localhost&"
+        f"scope=user-read-currently-playing"
+    )
+
+    print("\n[!] To authorize, open this link in your browser:\n")
+    print(f"--> {auth_url} <--\n")
+    print("Click 'Agree'. You will be redirected to an empty/error page (localhost).")
+    print("Look at the address bar. Copy the 'code' parameter.")
+
+    code_input = input("Enter the 'code' from the URL (or paste the full URL): ").strip()
+
+    if not code_input:
+        print("Authorization cancelled. Spotify is disabled.\n")
+        ENABLE_SPOTIFY = False
+        return
+
+    if 'code=' in code_input:
+        try:
+            parsed = urllib.parse.urlparse(code_input)
+            params = urllib.parse.parse_qs(parsed.query)
+            code = params.get('code', [code_input])[0]
+        except:
+            code = code_input.split('code=')[1].split('&')[0]
+    else:
+        code = code_input
+
+    print("Fetching Access Token...")
+    data = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': 'http://localhost',
+        'client_id': c_id,
+        'client_secret': c_secret,
+    }
+
+    try:
+        resp = requests.post(API_ENDPOINTS['spotify_token'], data=data)
+        resp.raise_for_status()
+        token_data = resp.json()
+        token_data['client_id'] = c_id
+        token_data['client_secret'] = c_secret
+        token_data['expires_at'] = time.time() + token_data.get('expires_in', 3600)
+
+        with open(SPOTIFY_CONF['TOKEN_FILE'], 'w') as f:
+            json.dump(token_data, f, indent=4)
+        print("Spotify Authorization Successful!\n")
+    except Exception as e:
+        print(f"Failed to fetch Spotify tokens: {e}")
+        ENABLE_SPOTIFY = False
+
+
+def fetch_spotify_data():
+    if not os.path.exists(SPOTIFY_CONF['TOKEN_FILE']): return None
+    with open(SPOTIFY_CONF['TOKEN_FILE'], 'r') as f:
+        token_data = json.load(f)
+
+    c_id = token_data.get('client_id')
+    c_secret = token_data.get('client_secret')
+
+    if time.time() > token_data.get('expires_at', 0):
+        data = {
+            'grant_type': 'refresh_token',
+            'refresh_token': token_data.get('refresh_token'),
+            'client_id': c_id,
+            'client_secret': c_secret,
+        }
+        new_token = net.get_json(API_ENDPOINTS['spotify_token'], data=data, method='POST')
+        if new_token and 'access_token' in new_token:
+            token_data['access_token'] = new_token['access_token']
+            token_data['expires_at'] = time.time() + new_token.get('expires_in', 3600)
+            # Spotify doesn't always issue a new refresh_token on refresh —
+            # only overwrite ours if it actually sent one.
+            if 'refresh_token' in new_token:
+                token_data['refresh_token'] = new_token['refresh_token']
+            with open(SPOTIFY_CONF['TOKEN_FILE'], 'w') as f:
+                json.dump(token_data, f, indent=4)
+        else:
+            return None
+
+    headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+
+    # Not net.get_json(): Spotify returns 204 No Content (empty body, not an
+    # error) when nothing is playing, which get_json's resp.json() call would
+    # turn into a swallowed exception indistinguishable from a real failure —
+    # and unlike a real failure, "nothing playing" must still update the
+    # widget (otherwise pausing would leave stale "still playing" text on
+    # screen indefinitely).
+    try:
+        resp = net.session.get(API_ENDPOINTS['spotify_player'], headers=headers, timeout=8)
+    except Exception as e:
+        logging.error(f"Spotify player fetch error: {e}")
+        return None
+
+    if resp.status_code == 204:
+        return {'status': 'PAUSED', 'text': '', 'cover': None}
+    if resp.status_code == 401:
+        logging.error("Spotify token rejected (401) - re-run auth_spotify() to re-authorize.")
+        return None
+    if resp.status_code != 200:
+        logging.error(f"Spotify player fetch failed: HTTP {resp.status_code}")
+        return None
+
+    try:
+        payload = resp.json()
+    except Exception:
+        return None
+
+    if not payload.get('is_playing') or not payload.get('item'):
+        return {'status': 'PAUSED', 'text': '', 'cover': None}
+
+    item = payload['item']
+    track_name = item.get('name', 'Unknown')
+    artist = ", ".join(a.get('name', '') for a in item.get('artists', [])) or "Unknown"
+
+    images = item.get('album', {}).get('images', [])
+    img_url = ""
+    # Spotify lists a few sizes (typically 640/300/64px) — pick the smallest
+    # one that still covers our target display size, to avoid downloading a
+    # bigger image than we'll actually use.
+    for img in sorted(images, key=lambda i: i.get('width', 0)):
+        if img.get('width', 0) >= SPOTIFY_ART_SIZE:
+            img_url = img.get('url', '')
+            break
+    if not img_url and images:
+        img_url = images[0].get('url', '')
+
+    cover_dithered = None
+    if img_url:
+        img_bytes = net.get_image(img_url)
+        if img_bytes:
+            img_pil = Image.open(io.BytesIO(img_bytes)).convert("L").resize(
+                (SPOTIFY_ART_SIZE, SPOTIFY_ART_SIZE))
+            enhancer = ImageEnhance.Contrast(img_pil)
+            img_pil = enhancer.enhance(3.0)
+            cover_dithered = img_pil.convert("1", dither=Image.NONE)
+
+    return {'status': 'PLAYING', 'text': f"{artist} - {track_name}", 'cover': cover_dithered}
+
+
 def auth_roborock(email):
     global ENABLE_ROBOROCK
     if not ENABLE_ROBOROCK: return None
@@ -841,38 +1007,10 @@ def update_data_thread():
             data_store.last_update['antigravity'] = now
 
         if ENABLE_SPOTIFY and now - data_store.last_update['spotify'] > 20:
-            url = f"{API_ENDPOINTS['lastfm']}?method=user.getrecenttracks&user={LASTFM_CONF['USERNAME']}&api_key={LASTFM_CONF['API_KEY']}&format=json&limit=2&rnd={int(now)}"
-            s_data = net.get_json(url, timeout=5)
-            if s_data:
-                try:
-                    tracks = s_data.get('recenttracks', {}).get('track', [])
-                    if isinstance(tracks, dict): tracks = [tracks]
-                    if tracks:
-                        current_track = tracks[0]
-                        is_playing = current_track.get('@attr', {}).get('nowplaying') == 'true'
-                        if is_playing:
-                            track_name = current_track.get('name', 'Unknown')
-                            artist = current_track.get('artist', {}).get('#text', 'Unknown')
-                            img_url = ""
-                            for img in current_track.get('image', []):
-                                if img.get('size') == 'extralarge': img_url = img.get('#text', '')
-                            cover_dithered = None
-                            if img_url:
-                                img_bytes = net.get_image(img_url)
-                                if img_bytes:
-                                    img_pil = Image.open(io.BytesIO(img_bytes)).convert("L").resize(
-                                        (SPOTIFY_ART_SIZE, SPOTIFY_ART_SIZE))
-                                    enhancer = ImageEnhance.Contrast(img_pil)
-                                    img_pil = enhancer.enhance(3.0)
-                                    cover_dithered = img_pil.convert("1", dither=Image.NONE)
-                            with data_store.lock:
-                                data_store.spotify = {'status': 'PLAYING', 'text': f"{artist} - {track_name}",
-                                                      'cover': cover_dithered}
-                        else:
-                            with data_store.lock:
-                                data_store.spotify = {'status': 'PAUSED', 'text': '', 'cover': None}
-                except:
-                    pass
+            s_data = fetch_spotify_data()
+            if s_data is not None:
+                with data_store.lock:
+                    data_store.spotify = s_data
             data_store.last_update['spotify'] = now
 
         gc.collect()
@@ -1425,6 +1563,7 @@ def load_fonts():
 # --- MAIN LOOP ---
 def main():
     auth_strava()
+    auth_spotify()
     auth_claude()
     auth_antigravity()
     auth_codex()

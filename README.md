@@ -119,13 +119,18 @@ All widget toggles and API configurations are located at the top of the `main.py
 2. Note your printer's **IP Address**, **Serial Number**, and **Access Code**. (Force on your router to map exact IP address)
 3. Update the `PRINTER_CONF` dictionary in the script with these local credentials.
 
-### Spotify (via Last.fm)
-Since the official Spotify API requires running a local web server for complex token renewals, this dashboard uses Last.fm to fetch the current playing track reliably form Spotify. It's is transparent and working method.
-1. Connect your Spotify account to Last.fm.
-2. Create a Last.fm API account to generate an **API Key**.
-3. Update `LASTFM_CONF` in the script with your API Key and Last.fm Username.
-   
-**After configuration, you no longer need to use the Last.fm service, and a paid Last.fm account is not required. You can continue to use only the Spotify service.**
+### Spotify
+Uses Spotify's own Web API directly (no Last.fm, no local web server needed).
+1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app.
+   Add `http://localhost` as a Redirect URI in the app's settings (any App name/description is fine).
+2. Note the app's **Client ID** and **Client Secret**.
+3. Set `ENABLE_SPOTIFY = True` in `main.py` and run it (`python main.py` on the Pi, or
+   `python render_preview.py` on Windows/dev machines — both trigger the same one-time setup).
+4. The script pauses, asks for your Client ID/Secret, then prints an authorization URL.
+   Open it in your browser, click "Agree", and you'll be redirected to a dead `localhost` page.
+5. Copy the whole URL containing `code=...` from your browser's address bar and paste it back into
+   the terminal. The script fetches and saves the tokens to `spotify_token.json`, and refreshes them
+   automatically in the background from then on — no further logins needed.
 
 ### Gmail
 1. Go to the Google Cloud Console.

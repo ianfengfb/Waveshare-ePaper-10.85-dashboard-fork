@@ -153,6 +153,11 @@ def main():
 
     import main as dashboard  # noqa: E402  (import must follow the mock setup above)
 
+    # One-time interactive setup (e.g. Spotify's OAuth code exchange): a
+    # no-op once ENABLE_SPOTIFY is off or the token file already exists, so
+    # this is safe to leave in on every run.
+    dashboard.auth_spotify()
+
     epd = dashboard.epd10in85.EPD()
     epd.init()
     epd.Clear()
