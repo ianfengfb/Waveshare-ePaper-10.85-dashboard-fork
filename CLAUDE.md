@@ -202,16 +202,47 @@ have very different vertical metrics and it looks visibly off.
 centres each (text, font) segment's own bounding box on a shared
 `y_center`, which is what `render_screen()`'s greeting widget uses.
 
+## Companion web app (Cloudflare Pages + D1)
+
+A separate project (its own repo, not this one) is being built to feed this
+dashboard custom data it has no public API for: a Cloudflare Pages app
+backed by a D1 database, reachable at a `*.pages.dev` dev subdomain (no
+custom domain). First use case is a personal todo list
+(`GET /api/top-todos` → the N highest-priority items) and remote widget
+configuration (which widgets/features should be visible, without editing
+`main.py` and redeploying to the Pi by hand). More endpoints will show up
+there as new widgets need custom data — this section describes the shape to
+follow, not an exhaustive endpoint list.
+
+**One endpoint per resource, not one combined blob.** Each logical piece of
+data (todos, widget config, whatever's next) gets its own URL
+(`/api/top-todos`, `/api/widget-config`, ...), fetched independently by
+`update_data_thread` on its own timer — the same pattern every other widget
+in this file already uses (weather, crypto, Spotify, ...): a fetch that can
+fail without affecting anything else, degrading to last-known-value or a
+placeholder. A single combined endpoint breaks that isolation — a bug in
+the todo feature's D1 query would 500 the whole response and blank out
+unrelated data (like widget config) riding along in the same payload, and
+it forces every consumer onto one refresh cadence even though a todo list
+wants to feel reasonably fresh while widget config is more "check every
+so often." Cloudflare's free tier (100k Workers requests/day, 5M D1 rows
+read/day) isn't a reason to combine them either — a personal dashboard
+polling a handful of endpoints every few minutes is nowhere near either
+limit regardless of how many separate endpoints it hits.
+
+Auth: a shared secret sent as a header (e.g. `X-Api-Key`) on every request,
+checked once in the Cloudflare Pages Function — the endpoint is otherwise
+public since there's no real domain/WAF in front of it.
+
 ## Roadmap (not yet built — one session per item)
 
 These are planned follow-ups; each is its own scoped session. Keep the
 render/drive split in mind when touching related code, but don't build these
 until asked:
 
-1. **Todo widget** from a self-hosted Cloudflare Pages API
-   (`GET /api/top-todos`), replacing an existing widget slot. Needs a shared
-   secret header and the same fetch → parse → draw → fallback pattern as the
-   other widgets.
+1. **Todo widget** — fetches `GET /api/top-todos` from the companion app
+   above, replacing an existing widget slot. Same shared-secret header and
+   fetch → parse → draw → fallback pattern as every other widget.
 2. **Outlook unread count** replacing the Gmail widget: swap the fetch layer
    for Microsoft Graph (delegated permission, own mailbox) — draw logic is
    unchanged. Confirm with IT before investing effort if targeting a
