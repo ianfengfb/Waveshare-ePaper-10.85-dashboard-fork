@@ -1136,6 +1136,21 @@ def update_data_thread():
 
 
 # --- GRAPHICS FUNCTIONS ---
+def needs_intl_font(text):
+    """True if text has any CJK/Kana/Cyrillic character — Aldrich (this
+    dashboard's default font) has none of these, but fnt/CJK-Cyrillic-
+    Spotify.ttf ('intl_24'/'intl_28') covers all three plus plain ASCII, so
+    a whole field can render in one font call once this is True. Deliberately
+    narrower than "any non-ASCII": an accented-Latin name (e.g. "Beyoncé")
+    isn't covered by that font either, so there's no point rerouting it away
+    from Aldrich, which renders the rest of the name fine."""
+    for ch in text:
+        cp = ord(ch)
+        if 0x4E00 <= cp <= 0x9FFF or 0x3040 <= cp <= 0x30FF or 0x0400 <= cp <= 0x04FF:
+            return True
+    return False
+
+
 def text_width(draw, text, font):
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
@@ -1547,21 +1562,26 @@ def render_screen(epd, fonts):
 
             draw_icon(draw, int(art_x + (art_size - 40) / 2), art_y + art_size + 15, "icon_play", (40, 40))
 
-            # Artist/track names are external (Last.fm) text of unpredictable
+            # Artist/track names are external (Spotify) text of unpredictable
             # length and character width, like the affirmation line — a
             # naive character-count slice can still overflow the column, so
-            # measure and ellipsis-truncate in pixels instead.
+            # measure and ellipsis-truncate in pixels instead. They may also
+            # be in Chinese/Japanese/Russian, which Aldrich can't render at
+            # all (see needs_intl_font()) — pick the font per field first,
+            # since wrapping/measuring both depend on which font is used.
             words = spotify['text'].split(' - ')
             artist_raw = words[0] if len(words) > 0 else "Unknown"
             track_raw = words[1] if len(words) > 1 else ""
-            artist = wrap_lines_limited(draw, artist_raw, fonts['28'], content_w, max_lines=1)[0] if artist_raw else ""
-            track = wrap_lines_limited(draw, track_raw, fonts['24'], content_w, max_lines=1)[0] if track_raw else ""
+            artist_font = fonts['intl_28'] if needs_intl_font(artist_raw) else fonts['28']
+            track_font = fonts['intl_24'] if needs_intl_font(track_raw) else fonts['24']
+            artist = wrap_lines_limited(draw, artist_raw, artist_font, content_w, max_lines=1)[0] if artist_raw else ""
+            track = wrap_lines_limited(draw, track_raw, track_font, content_w, max_lines=1)[0] if track_raw else ""
 
             row_y = art_y + art_size + 70
-            aw = text_width(draw, artist, fonts['28'])
-            draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=fonts['28'], fill=0)
-            tw = text_width(draw, track, fonts['24'])
-            draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=fonts['24'], fill=0)
+            aw = text_width(draw, artist, artist_font)
+            draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=artist_font, fill=0)
+            tw = text_width(draw, track, track_font)
+            draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=track_font, fill=0)
         else:
             draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
             msg = "Nothing Playing"
@@ -1679,6 +1699,8 @@ def load_fonts():
         '80': load_font('Aldrich-Regular.ttc', 80),
         'clock': load_font('advanced_led_board-7.ttc', 180),
         'cjk_greeting': load_font('CJK-Greeting.ttf', 40),
+        'intl_24': load_font('CJK-Cyrillic-Spotify.ttf', 24),
+        'intl_28': load_font('CJK-Cyrillic-Spotify.ttf', 28),
     }
 
 

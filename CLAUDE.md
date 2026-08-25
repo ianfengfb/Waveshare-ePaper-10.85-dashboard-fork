@@ -162,6 +162,27 @@ overflow the column if the text happens to be wide characters, so the
 widget reuses `wrap_lines_limited(..., max_lines=1)` to pixel-measure and
 ellipsis-truncate them instead, the same helper the affirmation line uses.
 
+Artist/track names can also be full Chinese/Japanese/Russian, which Aldrich
+can't render at all — `needs_intl_font()` checks each field (CJK Unified
+Ideographs / Hiragana+Katakana / Cyrillic ranges) and switches that whole
+field to `fnt/CJK-Cyrillic-Spotify.ttf` (`'intl_24'`/`'intl_28'`) when it
+does, rather than mixing fonts within one field like the greeting widget's
+`draw_mixed_text()` does — simpler, and correct here since a field is never
+part-Latin-part-CJK in practice. This font is a ~5.8MB subset (GB2312 +
+Big5 + Hiragana/Katakana + Cyrillic + ASCII), not the tiny curated one the
+greeting widget uses — the two are unrelated problems: the greeting widget
+only ever needs a handful of words *we* chose, so a handful of exact glyphs
+is enough, but artist/track names are unpredictable live data, so this one
+needs broad script coverage instead. GB2312 alone (Simplified Chinese,
+~7445 chars, 2.4MB) is NOT enough on its own — verified against a real
+J-pop artist name (米津玄師, Kenshi Yonezu) where 師 uses a traditional
+character form GB2312 doesn't have but Big5 does; Japanese Kanji lean
+closer to Traditional than Simplified. Regenerate with `fontTools.subset`
+the same way as `fnt/CJK-Greeting.ttf` (see below) if broader coverage is
+ever needed — derive the GB2312/Big5 code point lists via Python's built-in
+codecs (`bytes([hi, lo]).decode('gb2312')` swept over the valid byte range)
+rather than guessing a Unicode range, since neither is contiguous.
+
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
 `fnt/Aldrich-Regular.ttc` and `fnt/advanced_led_board-7.ttc` (the only two
