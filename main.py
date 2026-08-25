@@ -1543,8 +1543,12 @@ def render_screen(epd, fonts):
 
     # 3. Gmail
     gm_y = 400
-    draw_icon(draw, col3_x, gm_y, "icon_mail", (60, 60))
-    draw.text((col3_x + 80, gm_y + 10), f"Unread Inbox: {gmail_unread}", font=fonts['35'], fill=0)
+    gm_icon_size = 60
+    draw_icon(draw, col3_x, gm_y, "icon_mail", (gm_icon_size, gm_icon_size))
+    gmail_text = f"Unread Inbox: {gmail_unread}"
+    bbox = draw.textbbox((0, 0), gmail_text, font=fonts['35'])
+    text_y = gm_y + (gm_icon_size - (bbox[3] - bbox[1])) / 2 - bbox[1]
+    draw.text((col3_x + 80, text_y), gmail_text, font=fonts['35'], fill=0)
 
     return Himage
 
