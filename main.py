@@ -306,7 +306,7 @@ class DataStore:
             'bike_total': 0, 'hike_total': 0
         }
         self.printer = {'status': 'OFFLINE'}
-        self.gmail_unread = 0
+        self.gmail_unread_today = 0
         self.spotify = {'status': 'PAUSED', 'text': '', 'cover': None}
         self.claude = {'error': False, 'five_hour': {}, 'seven_day': {}}
         self.antigravity = {'error': False, 'models': []}
@@ -1038,8 +1038,15 @@ def update_data_thread():
                         with open(GMAIL_TOKEN_PATH, 'w') as t: t.write(creds.to_json())
                 if creds and creds.valid:
                     service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
-                    label_info = service.users().labels().get(userId='me', id='INBOX').execute()
-                    with data_store.lock: data_store.gmail_unread = label_info.get('messagesUnread', 0)
+                    # Total inbox unread isn't very actionable (it accumulates
+                    # forever); count only unread received since local
+                    # midnight instead. after: takes a Unix timestamp, so
+                    # this is exact regardless of the Pi's timezone, unlike
+                    # Gmail's after:YYYY/MM/DD form which is UTC-based.
+                    midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    query = f"is:unread after:{int(midnight.timestamp())}"
+                    result = service.users().messages().list(userId='me', q=query, maxResults=500).execute()
+                    with data_store.lock: data_store.gmail_unread_today = len(result.get('messages', []))
             except:
                 pass
             data_store.last_update['gmail'] = now
@@ -1263,7 +1270,7 @@ def render_screen(epd, fonts):
         strava = data_store.strava.copy()
         printer = data_store.printer.copy()
         rob = data_store.roborock.copy()
-        gmail_unread = data_store.gmail_unread
+        gmail_unread_today = data_store.gmail_unread_today
         spotify = data_store.spotify.copy()
         claude = data_store.claude.copy()
         antigravity = data_store.antigravity.copy()
@@ -1647,7 +1654,7 @@ def render_screen(epd, fonts):
     gm_y = 400
     gm_icon_size = 60
     draw_icon(draw, col3_x, gm_y, "icon_mail", (gm_icon_size, gm_icon_size))
-    gmail_text = f"Unread Inbox: {gmail_unread}"
+    gmail_text = f"Unread Today: {gmail_unread_today}"
     bbox = draw.textbbox((0, 0), gmail_text, font=fonts['35'])
     text_y = gm_y + (gm_icon_size - (bbox[3] - bbox[1])) / 2 - bbox[1]
     draw.text((col3_x + 80, text_y), gmail_text, font=fonts['35'], fill=0)
