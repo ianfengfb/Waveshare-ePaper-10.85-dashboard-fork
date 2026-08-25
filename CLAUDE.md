@@ -119,9 +119,13 @@ upscaling an already-dithered 1-bit image afterwards would smear it.
 
 Uses Spotify's own Web API (`/v1/me/player/currently-playing`), not
 Last.fm — see `auth_spotify()`/`fetch_spotify_data()`. One-time OAuth via
-the same `redirect_uri=http://localhost` + copy-the-code-from-the-dead-page
-trick `auth_strava()` already used, then a `refresh_token` renews access
-tokens indefinitely with no further browser interaction. `fetch_spotify_data()`
+the same copy-the-code-from-the-dead-redirect-page trick `auth_strava()`
+already used, then a `refresh_token` renews access tokens indefinitely with
+no further browser interaction. The redirect URI is `SPOTIFY_REDIRECT_URI`
+(`http://127.0.0.1`, not `http://localhost` — Spotify's dashboard rejects
+the hostname as insecure and requires the loopback IP literal; Strava's
+equivalent flow doesn't have this restriction, hence the difference from
+`auth_strava()`'s `http://localhost`). `fetch_spotify_data()`
 makes its own request rather than using `net.get_json()`, because Spotify
 returns HTTP 204 (empty body, not an error) when nothing is playing —
 `get_json()`'s `resp.json()` call would turn that into a swallowed exception

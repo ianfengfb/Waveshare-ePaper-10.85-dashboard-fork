@@ -126,6 +126,11 @@ ROBOROCK_CONF = {
 SPOTIFY_CONF = {
     'TOKEN_FILE': os.path.join(BASE_DIR, 'spotify_token.json')
 }
+# Spotify rejects the hostname "localhost" as a redirect URI (flagged
+# "not secure" in the dashboard) — it requires the loopback IP literal
+# instead, per OAuth-for-native-apps best practice (RFC 8252). Must match
+# exactly what's registered in the Spotify Dashboard app.
+SPOTIFY_REDIRECT_URI = "http://127.0.0.1"
 # Album art is fetched at this size so the dithering is computed for the
 # widget's actual display size, not upscaled afterwards (which would smear
 # an already-dithered 1-bit image).
@@ -545,8 +550,9 @@ def auth_spotify():
 
     print("\n--- SPOTIFY CONFIGURATION REQUIRED ---")
     print("Register an app at https://developer.spotify.com/dashboard first")
-    print("(any values are fine for the redirect URI field except it must be")
-    print("exactly http://localhost — add that as a Redirect URI there).\n")
+    print(f"(add {SPOTIFY_REDIRECT_URI} as a Redirect URI there — Spotify")
+    print("rejects the hostname 'localhost' as insecure, so it must be the")
+    print("IP literal above, not http://localhost).\n")
     c_id = input("Enter Spotify Client ID (or press Enter to disable): ").strip()
     if not c_id:
         print("Spotify is disabled. Fallback (Nothing Playing) will be used.\n")
@@ -559,13 +565,13 @@ def auth_spotify():
         f"{API_ENDPOINTS['spotify_auth']}?"
         f"client_id={c_id}&"
         f"response_type=code&"
-        f"redirect_uri=http://localhost&"
+        f"redirect_uri={urllib.parse.quote(SPOTIFY_REDIRECT_URI, safe='')}&"
         f"scope=user-read-currently-playing"
     )
 
     print("\n[!] To authorize, open this link in your browser:\n")
     print(f"--> {auth_url} <--\n")
-    print("Click 'Agree'. You will be redirected to an empty/error page (localhost).")
+    print(f"Click 'Agree'. You will be redirected to an empty/error page ({SPOTIFY_REDIRECT_URI}).")
     print("Look at the address bar. Copy the 'code' parameter.")
 
     code_input = input("Enter the 'code' from the URL (or paste the full URL): ").strip()
@@ -589,7 +595,7 @@ def auth_spotify():
     data = {
         'grant_type': 'authorization_code',
         'code': code,
-        'redirect_uri': 'http://localhost',
+        'redirect_uri': SPOTIFY_REDIRECT_URI,
         'client_id': c_id,
         'client_secret': c_secret,
     }
