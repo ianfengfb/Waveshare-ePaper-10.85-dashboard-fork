@@ -153,7 +153,7 @@ takes the `if ENABLE_TODO: ... else: <all three existing widget slots>`
 branch, so the Tasks widget replaces System Load/Strava, Crypto/Bambu, *and*
 Ping/Roborock/Antigravity/Codex all at once rather than swapping just one of
 the three stacked slots — it's a whole-column takeover, same shape as
-`ENABLE_WEATHER` but for three slots instead of one.
+`MIDDLE_COLUMN_WIDGET` but for three slots instead of one.
 
 `TODO_MAX_TASKS` (currently 5) always reserves that many row slots — fewer
 real tasks just leave empty checkbox rows rather than resizing the rows, so
@@ -182,16 +182,20 @@ same helper, same reasoning. The due-time column budget (100px) is sized
 off measuring a real "HH:MM AM/PM" string (~94px at `fonts['20']`), not a
 round number — an untested guess here undercounted it once already.
 
-### Middle column: Spotify now-playing, not Weather
+### Middle column: Spotify or Weather, switchable via MIDDLE_COLUMN_WIDGET
 
-`ENABLE_WEATHER = False` by default — the middle column shows the Spotify
-now-playing widget instead (`render_screen()`'s `elif not ENABLE_WEATHER:`
-branch), so Spotify and the greeting widget can be visible at the same time
-rather than fighting over the same column-3 slot they originally shared.
-Weather's drawing code is untouched, just gated behind the flag, so flipping
-it back to `True` restores it on this slot. `SPOTIFY_ART_SIZE` (currently
-190px) controls the album-art fetch/display size in one place — the fetch
-code (`fetch_spotify_data()`) resizes to this before dithering, since
+`MIDDLE_COLUMN_WIDGET = "spotify"` by default (`"spotify"` | `"weather"`) —
+a single mode selector rather than the old `ENABLE_WEATHER` boolean, same
+reasoning as `EMAIL_PROVIDER`: exactly one of the two can occupy this slot,
+so two independent flags would allow an ambiguous "both on" state. Mirrors
+a Spotify/Weather switcher on the companion app's side — local
+edit-and-redeploy constant for now, intended to eventually be set remotely
+via `/api/widget-config` (see roadmap) the same way `EMAIL_PROVIDER` is.
+`render_screen()`'s column-2 block picks between the two with
+`elif MIDDLE_COLUMN_WIDGET == "weather": ... else: <Spotify>` — Weather's
+drawing code is untouched, just gated behind the switch. `SPOTIFY_ART_SIZE`
+(currently 190px) controls the album-art fetch/display size in one place —
+the fetch code (`fetch_spotify_data()`) resizes to this before dithering, since
 upscaling an already-dithered 1-bit image afterwards would smear it.
 
 Uses Spotify's own Web API (`/v1/me/player/currently-playing`), not
@@ -253,15 +257,23 @@ ever needed — derive the GB2312/Big5 code point lists via Python's built-in
 codecs (`bytes([hi, lo]).decode('gb2312')` swept over the valid byte range)
 rather than guessing a Unicode range, since neither is contiguous.
 
-### Middle column: hydration/growth widget temporarily overlays Spotify
+**Weather placeholder**: when `MIDDLE_COLUMN_WIDGET == "weather"` but the
+fetch hasn't populated `data_store.weather['current']` yet (fresh boot, or
+open-meteo unreachable), `render_screen()` falls through to a "Weather
+Unavailable" placeholder — a header ("WEATHER" + `icon_clouds`) plus a big
+centred `icon_clouds` and message, the same "icon plus centred message"
+shape as Spotify's "Nothing Playing" fallback. Without this, a dead
+weather fetch left the whole column blank, since the original code only
+had a weather-vs-Spotify branch with no third "weather failed" state.
 
-`ENABLE_WATER = False` by default. When on, `render_screen()`'s
-`elif not ENABLE_WEATHER:` branch (the same slot Spotify already took over
-from Weather) checks a `show_water` flag before choosing Spotify vs. the
-hydration widget — `ENABLE_WATER` and a water log within the last
-`WATER_SHOW_SECONDS` (60) of now. Has no effect while `ENABLE_WEATHER` is
-`True`: weather keeps priority over this slot, same as it already does over
-Spotify.
+### Middle column: hydration/growth widget overlays Spotify or Weather
+
+`ENABLE_WATER = False` by default. When on, `render_screen()`'s column-2
+block checks a `show_water` flag *before* the `MIDDLE_COLUMN_WIDGET`
+switch, so the hydration widget takes priority over whichever of
+Spotify/Weather is currently active — not just Spotify. `show_water` is
+`ENABLE_WATER` and a water log within the last `WATER_SHOW_SECONDS` (60)
+of now — regardless of `MIDDLE_COLUMN_WIDGET`.
 
 **Timing piggybacks on the existing render loop instead of a dedicated
 timer.** `main()`'s loop already redraws the whole screen roughly once a
@@ -423,19 +435,23 @@ until asked:
    task dict should keep the `{"title": ..., "due": ..., "completed": ...}`
    shape (`due` nullable) the draw code already expects.
 2. **Remote widget config via `/api/widget-config`** — right now
-   `EMAIL_PROVIDER` (and every `ENABLE_*` flag) is a local edit-and-redeploy
-   constant. Once the companion app exists, have `update_data_thread` poll
-   `/api/widget-config` on its own timer (independent of `/api/top-todos`,
-   per the one-endpoint-per-resource rule above) and let its response
-   override these at runtime. Proposed shape, extensible as more remote
-   toggles are needed — add fields, don't restructure what's already there:
+   `EMAIL_PROVIDER`, `MIDDLE_COLUMN_WIDGET` (and every `ENABLE_*` flag) are
+   local edit-and-redeploy constants. Once the companion app exists, have
+   `update_data_thread` poll `/api/widget-config` on its own timer
+   (independent of `/api/top-todos`, per the one-endpoint-per-resource rule
+   above) and let its response override these at runtime. Proposed shape,
+   extensible as more remote toggles are needed — add fields, don't
+   restructure what's already there:
    ```json
-   { "email_provider": "gmail" }
+   { "email_provider": "gmail", "middle_widget": "spotify" }
    ```
    `email_provider` mirrors `EMAIL_PROVIDER`'s exact values (`"gmail"` /
-   `"outlook"` / `null`). Missing/unrecognised values should fall back to
-   the local constant, not disable the widget — a remote-config outage must
-   degrade like every other fetch in this file, not change behaviour.
+   `"outlook"` / `null`). `middle_widget` mirrors `MIDDLE_COLUMN_WIDGET`'s
+   exact values (`"spotify"` / `"weather"`) — this is the field the
+   companion app's own Spotify/Weather switcher should drive. Missing/
+   unrecognised values should fall back to the local constant, not disable
+   the widget — a remote-config outage must degrade like every other fetch
+   in this file, not change behaviour.
 3. **iPhone steps (yesterday only)**: push, not pull — an iOS Shortcuts
    automation POSTs the daily total to a small Flask receiver running on the
    Pi's LAN; the dashboard reads the stored value. (Strava is the fallback

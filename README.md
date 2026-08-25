@@ -6,16 +6,16 @@ A fully functional E-ink dashboard running on a Raspberry Pi Zero 1W or 2W. Desi
 * **(NEW!) Tasks widget:** Shows today's top tasks (title + optional due time) in the left column,
   replacing System Load/Crypto/Ping. Placeholder data for now (`ENABLE_TODO`, `TODO_PLACEHOLDER_TASKS`
   in `main.py`) — a real fetch will land once the companion todo-list app exists.
-* **(NEW!) Hydration/growth widget:** Temporarily overlays Spotify in the middle column for about a
-  minute whenever a new water log comes in, showing a plant that grows from a sprout to a full lush
-  tree over 40 litres logged, resetting (and counting towards a lifetime total) whenever it reaches
-  that target, however long that takes (`ENABLE_WATER` in `main.py`) — a real fetch will land once the companion
-  app's water-logging endpoint exists.
+* **(NEW!) Hydration/growth widget:** Temporarily overlays whichever of Spotify/Weather is active in
+  the middle column for about a minute whenever a new water log comes in, showing a plant that grows
+  from a sprout to a full lush tree over 40 litres logged, resetting (and counting towards a lifetime
+  total) whenever it reaches that target, however long that takes (`ENABLE_WATER` in `main.py`) — a
+  real fetch will land once the companion app's water-logging endpoint exists.
 * **(NEW!) Now supporting both Raspberry Pi Zero 1 & 2!**
 * **(NEW!) Codex usage data:** Displays usage data for Codex, showing the limit, and limit reset time.
 * **Antigravity usage data:** Displays usage data for Antigravity, showing the limit, and limit reset time.
 * **Claude Code usage data:** Displays usage data for Claude Code, showing the daily limit, weekly limit, and limit reset time.
-* **Weather & Air Quality:** Real-time temperature, humidity, wind direction/speed, UV index, 4-hour forecast, and AQI (with visual inversion for high pollution levels) using the Open-Meteo API.
+* **Weather & Air Quality:** Real-time temperature, humidity, wind direction/speed, UV index, 4-hour forecast, and AQI (with visual inversion for high pollution levels) using the Open-Meteo API. Shares the middle column with Spotify, switchable via `MIDDLE_COLUMN_WIDGET` in `main.py`; falls back to a placeholder if the fetch fails.
 * **Strava Integration:** Displays total and yearly activity statistics (distance and ride counts), including specific breakdowns for biking and hiking.
 * **Bambu Lab 3D Printer:** Live monitoring of print status, completion percentage, remaining time, and current layer progress.
 * **Roborock Vacuum:** Live battery level, current status, and tracking for cleaned area during active cleaning.

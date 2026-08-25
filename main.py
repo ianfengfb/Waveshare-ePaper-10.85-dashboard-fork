@@ -60,23 +60,26 @@ ENABLE_ANTIGRAVITY = False
 ENABLE_CODEX = False
 ENABLE_CLAUDE = False
 ENABLE_SPOTIFY = False
-# The middle column shows Spotify now-playing instead of Weather while this
-# is False. Kept as a toggle (not deleted) so weather can come back on this
-# or another slot later — see CLAUDE.md roadmap.
-ENABLE_WEATHER = False
-# Temporarily overlays the hydration/growth widget on top of Spotify in the
-# middle column for WATER_SHOW_SECONDS right after a fresh water log arrives
-# from the companion app, then reverts to Spotify on its own — see
-# WATER_GROWTH_TARGET_LITRES below and CLAUDE.md for how the timing and
-# growth scale work. Has no effect while ENABLE_WEATHER is True (weather
-# keeps priority over this slot, same as it already does over Spotify).
+# Which widget the middle column shows: "spotify" or "weather". A single
+# mode selector rather than an ENABLE_WEATHER boolean, same reasoning as
+# EMAIL_PROVIDER below — exactly one of the two can occupy this slot at a
+# time. Local placeholder for now, matching the companion app's own
+# Spotify/Weather switcher — intended to eventually be set remotely via
+# /api/widget-config instead of edited by hand, see CLAUDE.md roadmap.
+MIDDLE_COLUMN_WIDGET = "spotify"
+# Temporarily overlays the hydration/growth widget on top of whichever of
+# Spotify/Weather is active in the middle column for WATER_SHOW_SECONDS
+# right after a fresh water log arrives from the companion app, then
+# reverts to that widget on its own — see WATER_GROWTH_TARGET_LITRES below
+# and CLAUDE.md for how the timing and growth scale work. Takes priority
+# over both Spotify and Weather regardless of MIDDLE_COLUMN_WIDGET.
 ENABLE_WATER = False
 # The left column shows the Tasks widget instead of System Load/Crypto/Ping
 # (and their Strava/Bambu/Roborock/Antigravity/Codex alternates) while this
-# is True — same "one column, one active widget" pattern as ENABLE_WEATHER.
-# Placeholder data only for now (TODO_PLACEHOLDER_TASKS below) — real data
-# will come from the companion app's GET /api/top-todos once it exists, see
-# CLAUDE.md roadmap.
+# is True — same "one column, one active widget" pattern as
+# MIDDLE_COLUMN_WIDGET. Placeholder data only for now (TODO_PLACEHOLDER_TASKS
+# below) — real data will come from the companion app's GET /api/top-todos
+# once it exists, see CLAUDE.md roadmap.
 ENABLE_TODO = False
 # Which email account the "Unread Today" widget reads from: "gmail",
 # "outlook", or None to disable it (shows 0, makes no API calls at all — the
@@ -1796,7 +1799,54 @@ def render_screen(epd, fonts):
     # --- COLUMN 2 (Weather or Spotify) ---
     col2_x = col_w + 20
 
-    if ENABLE_WEATHER and 'current' in weather:
+    water_last_logged_at = water.get('last_logged_at')
+    show_water = (
+        ENABLE_WATER and water_last_logged_at is not None
+        and (time.time() - water_last_logged_at) < WATER_SHOW_SECONDS
+    )
+
+    if show_water:
+        # Hydration/growth widget — temporarily overlays whichever of
+        # Spotify/Weather is active in this slot for WATER_SHOW_SECONDS
+        # right after a fresh water log, then reverts on its own once
+        # show_water goes false again on a later redraw (see
+        # WATER_SHOW_SECONDS above for why no dedicated timer is needed).
+        # Takes priority over both, regardless of MIDDLE_COLUMN_WIDGET.
+        draw_icon(draw, col2_x, 20, "icon_droplet", (40, 40))
+        draw.text((col2_x + 50, 28), "STAY HYDRATED", font=fonts['28'], fill=0)
+        draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
+
+        # Lifetime badge — how many times she's grown a plant to full
+        # (i.e. hit WATER_GROWTH_TARGET_LITRES) across all time, not
+        # just the current one. A small mini-plant icon rather than the
+        # same droplet as the header, so it reads as a distinct
+        # "trophy count" at a glance instead of a second copy of the
+        # header.
+        badge_size = 26
+        draw_icon(draw, col2_x, 94, "icon_plant_grown", (badge_size, badge_size))
+        lifetime_count = water.get('plants_grown_lifetime', 0)
+        draw.text((col2_x + badge_size + 8, 96), f"x {lifetime_count}", font=fonts['24'], fill=0)
+
+        content_w = col_w - 40
+        cx = col2_x + content_w / 2
+        ground_y = 415
+        progress_litres = water.get('progress_litres', 0.0)
+        growth_fraction = progress_litres / WATER_GROWTH_TARGET_LITRES
+        draw_growth_plant(draw, cx, ground_y, growth_fraction)
+
+        # No calendar window to anchor the label to any more (growth
+        # just resets on completion, whenever that happens), so show
+        # progress against the fixed target instead of a bare total.
+        total_text = f"{progress_litres:.1f} / {WATER_GROWTH_TARGET_LITRES:.0f} L grown"
+        tw = text_width(draw, total_text, fonts['28'])
+        draw.text((col2_x + max(0, (content_w - tw) / 2), ground_y + 15), total_text, font=fonts['28'], fill=0)
+
+        last_amount = water.get('last_amount_litres')
+        sub_text = f"+{last_amount:.1f} L just logged!" if last_amount else "New log recorded!"
+        sw = text_width(draw, sub_text, fonts['20'])
+        draw.text((col2_x + max(0, (content_w - sw) / 2), ground_y + 50), sub_text, font=fonts['20'], fill=0)
+
+    elif MIDDLE_COLUMN_WIDGET == "weather" and 'current' in weather:
         cur = weather['current']
         temp = cur.get('temperature_2m', 0)
         hum = cur.get('relative_humidity_2m', 0)
@@ -1915,97 +1965,69 @@ def render_screen(epd, fonts):
                 f_temp = math.floor(temps[idx] + 0.5)
                 draw.text((off_x + 15, 440), f"{f_temp}°C", font=fonts['24'], fill=0)
 
-    elif not ENABLE_WEATHER:
-        water_last_logged_at = water.get('last_logged_at')
-        show_water = (
-            ENABLE_WATER and water_last_logged_at is not None
-            and (time.time() - water_last_logged_at) < WATER_SHOW_SECONDS
-        )
+    elif MIDDLE_COLUMN_WIDGET == "weather":
+        # Weather placeholder — the fetch failed or hasn't populated yet
+        # (e.g. fresh boot, or open-meteo unreachable). Same "icon plus
+        # centred message" shape as Spotify's "Nothing Playing" fallback
+        # below, so a dead API degrades to a placeholder instead of
+        # leaving the column blank.
+        draw_icon(draw, col2_x, 20, "icon_clouds", (40, 40))
+        draw.text((col2_x + 50, 28), "WEATHER", font=fonts['28'], fill=0)
+        draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
 
-        if show_water:
-            # Fallback: hydration/growth widget — temporarily overlays
-            # Spotify for WATER_SHOW_SECONDS right after a fresh water log,
-            # then reverts on its own once show_water goes false again on a
-            # later redraw (see WATER_SHOW_SECONDS above for why no
-            # dedicated timer is needed).
-            draw_icon(draw, col2_x, 20, "icon_droplet", (40, 40))
-            draw.text((col2_x + 50, 28), "STAY HYDRATED", font=fonts['28'], fill=0)
-            draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
+        content_w = col_w - 40
+        icon_size = 120
+        icon_x = col2_x + max(0, (content_w - icon_size) / 2)
+        icon_y = 150
+        draw_icon(draw, int(icon_x), icon_y, "icon_clouds", (icon_size, icon_size))
+        msg = "Weather Unavailable"
+        mw = text_width(draw, msg, fonts['28'])
+        draw.text((col2_x + max(0, (content_w - mw) / 2), icon_y + icon_size + 30), msg, font=fonts['28'], fill=0)
 
-            # Lifetime badge — how many times she's grown a plant to full
-            # (i.e. hit WATER_GROWTH_TARGET_LITRES) across all time, not
-            # just the current one. A small mini-plant icon rather than the
-            # same droplet as the header, so it reads as a distinct
-            # "trophy count" at a glance instead of a second copy of the
-            # header.
-            badge_size = 26
-            draw_icon(draw, col2_x, 94, "icon_plant_grown", (badge_size, badge_size))
-            lifetime_count = water.get('plants_grown_lifetime', 0)
-            draw.text((col2_x + badge_size + 8, 96), f"x {lifetime_count}", font=fonts['24'], fill=0)
+    else:
+        # Spotify now-playing (default middle-column widget)
+        draw_icon(draw, col2_x, 20, "icon_spotify", (40, 40))
+        draw.text((col2_x + 50, 28), "SPOTIFY", font=fonts['28'], fill=0)
+        draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
 
-            content_w = col_w - 40
-            cx = col2_x + content_w / 2
-            ground_y = 415
-            progress_litres = water.get('progress_litres', 0.0)
-            growth_fraction = progress_litres / WATER_GROWTH_TARGET_LITRES
-            draw_growth_plant(draw, cx, ground_y, growth_fraction)
+        content_w = col_w - 40
+        art_size = SPOTIFY_ART_SIZE
+        art_x = col2_x + max(0, (content_w - art_size) / 2)
+        art_y = 105
 
-            # No calendar window to anchor the label to any more (growth
-            # just resets on completion, whenever that happens), so show
-            # progress against the fixed target instead of a bare total.
-            total_text = f"{progress_litres:.1f} / {WATER_GROWTH_TARGET_LITRES:.0f} L grown"
-            tw = text_width(draw, total_text, fonts['28'])
-            draw.text((col2_x + max(0, (content_w - tw) / 2), ground_y + 15), total_text, font=fonts['28'], fill=0)
-
-            last_amount = water.get('last_amount_litres')
-            sub_text = f"+{last_amount:.1f} L just logged!" if last_amount else "New log recorded!"
-            sw = text_width(draw, sub_text, fonts['20'])
-            draw.text((col2_x + max(0, (content_w - sw) / 2), ground_y + 50), sub_text, font=fonts['20'], fill=0)
-
-        else:
-            # Fallback: Spotify now-playing (replaces Weather in this slot)
-            draw_icon(draw, col2_x, 20, "icon_spotify", (40, 40))
-            draw.text((col2_x + 50, 28), "SPOTIFY", font=fonts['28'], fill=0)
-            draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
-
-            content_w = col_w - 40
-            art_size = SPOTIFY_ART_SIZE
-            art_x = col2_x + max(0, (content_w - art_size) / 2)
-            art_y = 105
-
-            if spotify['status'] == 'PLAYING':
-                if spotify['cover']:
-                    Himage.paste(spotify['cover'], (int(art_x), art_y))
-                else:
-                    draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
-
-                draw_icon(draw, int(art_x + (art_size - 40) / 2), art_y + art_size + 15, "icon_play", (40, 40))
-
-                # Artist/track names are external (Spotify) text of unpredictable
-                # length and character width, like the affirmation line — a
-                # naive character-count slice can still overflow the column, so
-                # measure and ellipsis-truncate in pixels instead. They may also
-                # be in Chinese/Japanese/Russian, which Aldrich can't render at
-                # all (see needs_intl_font()) — pick the font per field first,
-                # since wrapping/measuring both depend on which font is used.
-                words = spotify['text'].split(' - ')
-                artist_raw = words[0] if len(words) > 0 else "Unknown"
-                track_raw = words[1] if len(words) > 1 else ""
-                artist_font = fonts['intl_28'] if needs_intl_font(artist_raw) else fonts['28']
-                track_font = fonts['intl_24'] if needs_intl_font(track_raw) else fonts['24']
-                artist = wrap_lines_limited(draw, artist_raw, artist_font, content_w, max_lines=1)[0] if artist_raw else ""
-                track = wrap_lines_limited(draw, track_raw, track_font, content_w, max_lines=1)[0] if track_raw else ""
-
-                row_y = art_y + art_size + 70
-                aw = text_width(draw, artist, artist_font)
-                draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=artist_font, fill=0)
-                tw = text_width(draw, track, track_font)
-                draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=track_font, fill=0)
+        if spotify['status'] == 'PLAYING':
+            if spotify['cover']:
+                Himage.paste(spotify['cover'], (int(art_x), art_y))
             else:
                 draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
-                msg = "Nothing Playing"
-                mw = text_width(draw, msg, fonts['28'])
-                draw.text((col2_x + max(0, (content_w - mw) / 2), art_y + art_size + 40), msg, font=fonts['28'], fill=0)
+
+            draw_icon(draw, int(art_x + (art_size - 40) / 2), art_y + art_size + 15, "icon_play", (40, 40))
+
+            # Artist/track names are external (Spotify) text of unpredictable
+            # length and character width, like the affirmation line — a
+            # naive character-count slice can still overflow the column, so
+            # measure and ellipsis-truncate in pixels instead. They may also
+            # be in Chinese/Japanese/Russian, which Aldrich can't render at
+            # all (see needs_intl_font()) — pick the font per field first,
+            # since wrapping/measuring both depend on which font is used.
+            words = spotify['text'].split(' - ')
+            artist_raw = words[0] if len(words) > 0 else "Unknown"
+            track_raw = words[1] if len(words) > 1 else ""
+            artist_font = fonts['intl_28'] if needs_intl_font(artist_raw) else fonts['28']
+            track_font = fonts['intl_24'] if needs_intl_font(track_raw) else fonts['24']
+            artist = wrap_lines_limited(draw, artist_raw, artist_font, content_w, max_lines=1)[0] if artist_raw else ""
+            track = wrap_lines_limited(draw, track_raw, track_font, content_w, max_lines=1)[0] if track_raw else ""
+
+            row_y = art_y + art_size + 70
+            aw = text_width(draw, artist, artist_font)
+            draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=artist_font, fill=0)
+            tw = text_width(draw, track, track_font)
+            draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=track_font, fill=0)
+        else:
+            draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
+            msg = "Nothing Playing"
+            mw = text_width(draw, msg, fonts['28'])
+            draw.text((col2_x + max(0, (content_w - mw) / 2), art_y + art_size + 40), msg, font=fonts['28'], fill=0)
 
     draw.line((col_w * 2, 10, col_w * 2, 470), fill=0, width=2)
 
