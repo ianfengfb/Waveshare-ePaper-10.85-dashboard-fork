@@ -399,7 +399,14 @@ class DataStore:
         # last_logged_at is a Unix timestamp (seconds); None means "no log
         # seen yet", which always keeps the widget hidden — a safe default
         # until GET /api/water-status is wired in (see CLAUDE.md roadmap).
-        self.water = {'total_litres_month': 0.0, 'last_logged_at': None, 'last_amount_litres': None}
+        # plants_grown_lifetime is a running count of completed months (i.e.
+        # how many times total_litres_month has reached
+        # WATER_GROWTH_TARGET_LITRES) — computed server-side, same as the
+        # month total itself.
+        self.water = {
+            'total_litres_month': 0.0, 'last_logged_at': None,
+            'last_amount_litres': None, 'plants_grown_lifetime': 0
+        }
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
@@ -1916,6 +1923,16 @@ def render_screen(epd, fonts):
             draw_icon(draw, col2_x, 20, "icon_droplet", (40, 40))
             draw.text((col2_x + 50, 28), "STAY HYDRATED", font=fonts['28'], fill=0)
             draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
+
+            # Lifetime badge — how many times she's grown a plant to full
+            # (i.e. hit WATER_GROWTH_TARGET_LITRES) across all months, not
+            # just this one. A small mini-plant icon rather than the same
+            # droplet as the header, so it reads as a distinct "trophy
+            # count" at a glance instead of a second copy of the header.
+            badge_size = 26
+            draw_icon(draw, col2_x, 94, "icon_plant_grown", (badge_size, badge_size))
+            lifetime_count = water.get('plants_grown_lifetime', 0)
+            draw.text((col2_x + badge_size + 8, 96), f"x {lifetime_count}", font=fonts['24'], fill=0)
 
             content_w = col_w - 40
             cx = col2_x + content_w / 2

@@ -310,15 +310,27 @@ or leaf count by a visible amount, rather than only a few discrete jumps
 being visible across the whole month.
 
 `data_store.water` defaults to `{'total_litres_month': 0.0,
-'last_logged_at': None, 'last_amount_litres': None}` — `last_logged_at:
-None` always keeps `show_water` false, so a fresh checkout (or before the
-companion app's water endpoint is wired in) never shows the widget, same
+'last_logged_at': None, 'last_amount_litres': None,
+'plants_grown_lifetime': 0}` — `last_logged_at: None` always keeps
+`show_water` false, so a fresh checkout (or before the companion app's
+water endpoint is wired in) never shows the widget, same
 degrade-to-safe-default convention as every other credentialed/unwired
 widget in this file. `icons/icon_droplet.bmp` is a hand-drawn bold water
 drop (no existing icon fit "hydration"), made the same way as
 `icons/icon_task.bmp` — a filled ellipse plus a triangular tip, rendered at
 10x scale and downsampled for anti-aliasing, matching the bold/filled style
 of the rest of the icon set.
+
+**Lifetime badge**: a small mini-plant icon (`icons/icon_plant_grown.bmp`
+— a scaled-down one-shot render of the same pot/stem/canopy shapes
+`draw_growth_plant()` draws, not a separate design) plus `"x N"` in the
+content area's top-left corner, showing `plants_grown_lifetime` — how many
+times she's grown a plant to full (`total_litres_month` reaching
+`WATER_GROWTH_TARGET_LITRES`) across all months, not just the current one.
+A distinct icon from the header's droplet so it reads as its own "trophy
+count" rather than a second copy of the header at a glance. The companion
+app computes this count server-side, same as the month total — the Pi only
+displays it.
 
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
@@ -441,7 +453,10 @@ until asked:
    shared-secret header and fetch → parse → fallback pattern as every other
    widget. Proposed shape:
    ```json
-   { "total_litres_month": 21.0, "last_logged_at": "2026-08-25T14:32:00Z", "last_amount_litres": 1.0 }
+   {
+     "total_litres_month": 21.0, "last_logged_at": "2026-08-25T14:32:00Z",
+     "last_amount_litres": 1.0, "plants_grown_lifetime": 4
+   }
    ```
    `total_litres_month` should already be the calendar-month running total
    computed server-side (a D1 query), not raw log rows — the Pi does no
@@ -451,6 +466,10 @@ until asked:
    can't fool the "was this within the last minute" check. On the Pi side,
    convert it to a Unix timestamp for `data_store.water['last_logged_at']`
    — that's what `show_water`'s `time.time() - ...` comparison expects.
+   `plants_grown_lifetime` is a running count of completed months (i.e. how
+   many times `total_litres_month` has reached `WATER_GROWTH_TARGET_LITRES`
+   across all months, not just the current one) — also computed
+   server-side; the Pi only displays it via the widget's lifetime badge.
 
 ## Conventions
 
