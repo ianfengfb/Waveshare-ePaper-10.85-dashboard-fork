@@ -137,6 +137,18 @@ indistinguishable from a real failure, and unlike a real failure "nothing
 playing" must still update the widget (otherwise pausing would leave stale
 "still playing" text on screen indefinitely).
 
+**Refresh token lifetime**: Spotify's dashboard shows "Refresh Token
+Lifetime: 180 days" for the app. This is an inactivity timer, not a hard
+expiry — using the refresh token resets it, and `fetch_spotify_data()` does
+that roughly hourly (access tokens last ~1hr) whenever `ENABLE_SPOTIFY` is on
+and the Pi is running, so it should never actually lapse in normal
+operation. It only bites if the dashboard sits off/disabled for 180+
+consecutive days, in which case Spotify starts rejecting the token; the
+existing 401 handling in `fetch_spotify_data()` logs
+`"Spotify token rejected (401) - re-run auth_spotify() to re-authorize"`
+rather than failing silently, at which point deleting `spotify_token.json`
+and re-running the one-time browser auth fixes it.
+
 Artist/track names are external (Spotify) text, same "unpredictable width"
 category as the affirmation line — a plain `[:N]` character slice can still
 overflow the column if the text happens to be wide characters, so the
