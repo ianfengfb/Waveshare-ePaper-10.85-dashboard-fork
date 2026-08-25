@@ -189,7 +189,13 @@ try:
     import bambulabs_api as bl
     from roborock.web_api import RoborockApiClient
     from roborock.devices.device_manager import create_device_manager, UserParams
-except ImportError:
+except Exception:
+    # Broader than ImportError deliberately: on non-Linux hosts (e.g.
+    # Windows), epdconfig.py's JetsonNano fallback finds the bundled
+    # sysfs_software_spi.so (a real file, so os.path.exists() passes) and
+    # calls ctypes.cdll.LoadLibrary() on it — a Linux ELF binary, which
+    # raises OSError on Windows, not ImportError. This whole block is only
+    # ever optional hardware imports, so any failure here is fine to ignore.
     pass
 
 # --- LOGGING ---
