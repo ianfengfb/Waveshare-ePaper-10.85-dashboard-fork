@@ -286,15 +286,28 @@ Pi derives itself. The Pi only ever divides that total by
 fraction — no date math on this side at all.
 
 **The plant is drawn procedurally (`draw_growth_plant()`), not as a set of
-stage bitmaps.** A single growth fraction continuously scales trunk
-height/width and canopy blob size/count, the same "draw it with Pillow
-primitives" approach the sparklines and checkboxes already use, rather than
-mapping ranges of litres to a handful of discrete images — no art assets to
-commission, and no "which bitmap for 23.7L" boundary logic to get wrong.
-Below ~8% growth only a soil mound shows (reads as "a seed waiting to
-grow" rather than a blank column); below ~20% it's two seed leaves on a
-short stem rather than a full canopy, since a circle cluster that small
-just reads as a blob.
+stage bitmaps.** A single growth fraction continuously scales the pot's
+stem height/width and the canopy's radius/leaf size/leaf count, the same
+"draw it with Pillow primitives" approach the sparklines and checkboxes
+already use, rather than mapping ranges of litres to a handful of discrete
+images — no art assets to commission, and no "which bitmap for 23.7L"
+boundary logic to get wrong. Canopy leaves are placed with a golden-angle
+(sunflower-seed) spiral (`GOLDEN_ANGLE = π(3-√5)`) rather than a fixed ring
+of blobs — that packing stays gap-free and non-repeating at any leaf count,
+so it looks equally natural whether there are 2 leaves (the sprout at
+t≈0) or 46 (the lush canopy at t=1), and every added leaf slots in without
+visibly rearranging the ones already there.
+
+It's a potted plant, not a tree straight out of the ground — a fixed pot
+(solid trapezoid body, a white rim ring cut into the top edge, a black soil
+disc inside it) sits under the stem regardless of growth. The stem and
+canopy never fully disappear even at t=0 — a very short stem with just 2
+tiny leaves reads as a sprout rather than an empty pot, per the "starts
+with a sprout, not nothing" requirement. Both canopy radius and leaf count
+scale with `t` (leaf count 2→46 by default), so a month's worth of
+individually-small litre increments still each nudge the canopy's spacing
+or leaf count by a visible amount, rather than only a few discrete jumps
+being visible across the whole month.
 
 `data_store.water` defaults to `{'total_litres_month': 0.0,
 'last_logged_at': None, 'last_amount_litres': None}` — `last_logged_at:

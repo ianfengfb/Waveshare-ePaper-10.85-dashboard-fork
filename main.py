@@ -1473,48 +1473,62 @@ def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
         draw.rectangle((x, y, x + size[0], y + size[1]), outline=255 if is_white else 0)
 
 
-def draw_growth_plant(draw, cx, ground_y, max_trunk_height, growth_fraction):
-    """Procedural tree, from bare soil to a full canopy, driven by a single
-    0.0-1.0 fraction — trunk height/width and canopy size/blob count all
-    scale continuously from it, rather than switching between a handful of
-    discrete stage images. Keeps this in step with the exact litre total
-    (no "which bitmap" mapping to maintain) and needs no extra art assets,
-    matching how the rest of the dashboard draws things (sparklines,
-    checkboxes) instead of importing icons for everything."""
+# Used to space canopy leaves via a sunflower-seed (Fibonacci) packing —
+# each leaf's angle advances by this irrational fraction of a turn, which
+# is what keeps the packing gap-free and non-repeating at any leaf count
+# rather than falling into the spoke/ring patterns a fixed angle step would.
+GOLDEN_ANGLE = math.pi * (3 - math.sqrt(5))
+
+
+def draw_growth_plant(draw, cx, ground_y, growth_fraction):
+    """Procedural potted plant, from a two-leaf sprout to a full lush
+    canopy, driven by a single 0.0-1.0 fraction — pot is fixed, but stem
+    height/width and canopy radius/leaf size/leaf count all scale
+    continuously from it, rather than switching between a handful of
+    discrete stage images. That also means (deliberately) every litre
+    nudges the canopy's leaf count and/or spacing by a little, since a
+    month's worth of small daily logs needs far more visibly-distinct
+    steps than a few discrete growth stages could give it. Needs no extra
+    art assets, matching how the rest of the dashboard draws things
+    (sparklines, checkboxes) instead of importing icons for everything."""
     t = max(0.0, min(1.0, growth_fraction))
 
-    # Soil mound — drawn even at t=0 so "nothing logged yet" still reads as
-    # "a seed waiting to grow" rather than an empty blank column.
-    draw.ellipse((cx - 30, ground_y - 6, cx + 30, ground_y + 6), fill=0)
-    if t < 0.08:
-        return
+    # Pot: solid trapezoid body (matches the bold/filled style of the rest
+    # of the icon set), with a white rim ring cut into the top edge and a
+    # black soil disc inside it, so it reads as an open pot rather than a
+    # solid black block.
+    pot_top_w, pot_bottom_w, pot_h = 74, 54, 46
+    pot_top_y = ground_y - pot_h
+    draw.polygon([
+        (cx - pot_top_w / 2, pot_top_y), (cx + pot_top_w / 2, pot_top_y),
+        (cx + pot_bottom_w / 2, ground_y), (cx - pot_bottom_w / 2, ground_y),
+    ], fill=0)
+    draw.ellipse((cx - pot_top_w / 2, pot_top_y - 8, cx + pot_top_w / 2, pot_top_y + 8), fill=255)
+    draw.ellipse((cx - pot_top_w / 2 + 7, pot_top_y - 4, cx + pot_top_w / 2 - 7, pot_top_y + 4), fill=0)
 
-    trunk_h = 20 + t * (max_trunk_height - 20)
-    trunk_w = 5 + t * 9
-    trunk_top = ground_y - trunk_h
-    draw.rectangle((cx - trunk_w / 2, trunk_top, cx + trunk_w / 2, ground_y - 4), fill=0)
+    # Stem: short and thin at t=0 (a sprout just clearing the soil) up to
+    # tall and thick at t=1.
+    stem_h = 14 + t * (140 - 14)
+    stem_w = 3 + t * (10 - 3)
+    stem_top_y = pot_top_y - stem_h
+    draw.rectangle((cx - stem_w / 2, stem_top_y, cx + stem_w / 2, pot_top_y), fill=0)
 
-    if t < 0.2:
-        # Sprout stage: two curved seed leaves instead of a full canopy —
-        # a cluster of overlapping circles this small just reads as a blob.
-        leaf_r = 8 + t * 20
-        draw.ellipse((cx - leaf_r * 1.6, trunk_top - leaf_r * 0.6, cx - leaf_r * 0.2, trunk_top + leaf_r * 0.6), fill=0)
-        draw.ellipse((cx + leaf_r * 0.2, trunk_top - leaf_r * 0.6, cx + leaf_r * 1.6, trunk_top + leaf_r * 0.6), fill=0)
-        return
+    # Canopy: leaves packed via the golden-angle spiral above, both radius
+    # and count growing with t — at t=0 this is just the sprout's two seed
+    # leaves; by t=1 it's a dense, lush cluster rather than a smooth blob.
+    canopy_r = 9 + t * (82 - 9)
+    leaf_r_base = 6 + t * (15 - 6)
+    n_leaves = int(round(2 + t * (46 - 2)))
+    canopy_cy = stem_top_y - canopy_r * 0.35
 
-    # Canopy: a ring of overlapping circles plus a center blob to fill the
-    # gaps — both the ring radius and the blob count grow with t, so the
-    # canopy fills out gradually instead of jumping straight to full size.
-    canopy_r = 18 + t * 60
-    blob_r = canopy_r * 0.55
-    canopy_cy = trunk_top - canopy_r * 0.3
-    n_blobs = 3 + int(t * 4)
-    for i in range(n_blobs):
-        angle = (2 * math.pi * i / n_blobs) - math.pi / 2
-        bx = cx + canopy_r * 0.5 * math.cos(angle)
-        by = canopy_cy + canopy_r * 0.3 * math.sin(angle)
-        draw.ellipse((bx - blob_r, by - blob_r, bx + blob_r, by + blob_r), fill=0)
-    draw.ellipse((cx - blob_r, canopy_cy - blob_r, cx + blob_r, canopy_cy + blob_r), fill=0)
+    for i in range(n_leaves):
+        frac = (i + 0.5) / n_leaves
+        r = canopy_r * math.sqrt(frac)
+        angle = i * GOLDEN_ANGLE
+        lx = cx + r * math.cos(angle)
+        ly = canopy_cy + r * math.sin(angle) * 0.8
+        leaf_r = leaf_r_base * (0.55 + 0.45 * (1 - frac))
+        draw.ellipse((lx - leaf_r, ly - leaf_r, lx + leaf_r, ly + leaf_r), fill=0)
 
 
 def draw_sparkline(draw, x, y, data, max_items=50, width=400, height=60, color=0, style="bar"):
@@ -1908,7 +1922,7 @@ def render_screen(epd, fonts):
             ground_y = 415
             total_month = water.get('total_litres_month', 0.0)
             growth_fraction = total_month / WATER_GROWTH_TARGET_LITRES
-            draw_growth_plant(draw, cx, ground_y, 230, growth_fraction)
+            draw_growth_plant(draw, cx, ground_y, growth_fraction)
 
             total_text = f"{total_month:.1f} L this month"
             tw = text_width(draw, total_text, fonts['28'])
