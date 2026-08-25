@@ -17,6 +17,9 @@ import subprocess
 import math
 import random
 import urllib.parse
+import hashlib
+import base64
+import secrets
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance
@@ -61,11 +64,21 @@ ENABLE_SPOTIFY = False
 # is False. Kept as a toggle (not deleted) so weather can come back on this
 # or another slot later — see CLAUDE.md roadmap.
 ENABLE_WEATHER = False
-# Only gates auth_gmail()'s interactive one-time prompt (so a fresh checkout
-# never blocks on input()). The Gmail widget itself is unconditional and
-# always visible — update_data_thread's fetch already self-gates on whether
-# token.json exists, same as before this flag existed.
-ENABLE_GMAIL = False
+# Which email account the "Unread Today" widget reads from: "gmail",
+# "outlook", or None to disable it (shows 0, makes no API calls at all — the
+# widget itself is otherwise unconditional and always visible). A single
+# mode selector rather than two independent ENABLE_* flags, since exactly
+# one provider (or none) can be active at a time — two booleans would allow
+# an ambiguous "both on" state this can't. Only gates the interactive
+# one-time auth prompts (auth_gmail()/auth_outlook()) so a fresh checkout
+# never blocks on input(); update_data_thread's fetch already self-gates on
+# whichever provider's token file exists, same as before this flag existed.
+# Defaults to None (like every other ENABLE_* flag defaults False) so a
+# fresh checkout never prompts — set to "gmail" or "outlook" locally once
+# you've set up that provider's credentials. Intended to eventually be set
+# remotely via the companion app's /api/widget-config endpoint instead of
+# edited by hand — see CLAUDE.md.
+EMAIL_PROVIDER = None
 
 # --- API ENDPOINTS ---
 API_ENDPOINTS = {
@@ -81,6 +94,9 @@ API_ENDPOINTS = {
     'spotify_player': 'https://api.spotify.com/v1/me/player/currently-playing',
     'gmail_auth': 'https://accounts.google.com/o/oauth2/v2/auth',
     'gmail_token': 'https://oauth2.googleapis.com/token',
+    'outlook_auth': 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    'outlook_token': 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    'outlook_messages': 'https://graph.microsoft.com/v1.0/me/messages',
     'affirmation': 'https://www.affirmations.dev',
 }
 
@@ -160,6 +176,15 @@ GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 # and plain http:// (not https://) is fine here since that's exactly what
 # Google's own InstalledAppFlow.run_local_server() helper uses internally.
 GMAIL_REDIRECT_URI = "http://127.0.0.1"
+
+OUTLOOK_TOKEN_PATH = os.path.join(BASE_DIR, 'outlook_token.json')
+OUTLOOK_SCOPES = "offline_access Mail.Read"
+# Matches the exact value Azure's "Mobile and desktop applications" platform
+# type offers as a one-click suggested redirect URI, to sidestep a repeat of
+# Spotify's redirect-URI back-and-forth. Registering as a public client
+# (rather than a confidential/Web client) means no client secret is needed
+# at all — auth uses PKCE (see auth_outlook()) instead.
+OUTLOOK_REDIRECT_URI = "http://localhost"
 
 if os.path.exists(LIB_DIR):
     sys.path.append(LIB_DIR)
@@ -306,7 +331,7 @@ class DataStore:
             'bike_total': 0, 'hike_total': 0
         }
         self.printer = {'status': 'OFFLINE'}
-        self.gmail_unread_today = 0
+        self.email_unread_today = 0
         self.spotify = {'status': 'PAUSED', 'text': '', 'cover': None}
         self.claude = {'error': False, 'five_hour': {}, 'seven_day': {}}
         self.antigravity = {'error': False, 'models': []}
@@ -321,7 +346,7 @@ class DataStore:
         self.affirmation = random.choice(GREETING_FALLBACK_AFFIRMATIONS)
 
         self.last_update = {
-            'weather': 0, 'strava': 0, 'printer': 0, 'gmail': 0,
+            'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0
         }
@@ -726,7 +751,7 @@ def fetch_spotify_data():
 
 
 def auth_gmail():
-    if not ENABLE_GMAIL: return
+    if EMAIL_PROVIDER != 'gmail': return
 
     if os.path.exists(GMAIL_TOKEN_PATH):
         return
@@ -807,6 +832,157 @@ def auth_gmail():
         print("Gmail Authorization Successful!\n")
     except Exception as e:
         print(f"Failed to fetch Gmail tokens: {e}")
+
+
+def _pkce_pair():
+    """Random (code_verifier, code_challenge) pair per RFC 7636. Azure's
+    public-client (no client secret) flow requires PKCE in place of a
+    secret — the verifier is only needed within this one auth_outlook()
+    call, never persisted."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b'=').decode('ascii')
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode('ascii')).digest()
+    ).rstrip(b'=').decode('ascii')
+    return verifier, challenge
+
+
+def auth_outlook():
+    if EMAIL_PROVIDER != 'outlook': return
+
+    if os.path.exists(OUTLOOK_TOKEN_PATH):
+        return
+
+    print("\n--- OUTLOOK CONFIGURATION REQUIRED ---")
+    print("Register an app at https://portal.azure.com -> Azure Active Directory")
+    print("-> App registrations -> New registration. Supported account types:")
+    print("'Personal Microsoft accounts and work/school accounts'. Then add a")
+    print("platform: 'Mobile and desktop applications', redirect URI")
+    print(f"{OUTLOOK_REDIRECT_URI} — under API permissions add the Microsoft")
+    print("Graph delegated permission 'Mail.Read'.\n")
+    print("If this is a work/school (M365) account: your organisation's admin")
+    print("policy can block this outright (Conditional Access, tenant-wide app")
+    print("consent restrictions) regardless of anything done here — if the")
+    print("browser step below fails with an admin-consent or blocked-by-policy")
+    print("error, that's IT policy, not a bug in this script.\n")
+
+    c_id = input("Enter Application (client) ID (or press Enter to disable): ").strip()
+    if not c_id:
+        print("Outlook is disabled. Unread count will stay at 0.\n")
+        return
+
+    verifier, challenge = _pkce_pair()
+
+    auth_url = (
+        f"{API_ENDPOINTS['outlook_auth']}?"
+        f"client_id={c_id}&"
+        f"response_type=code&"
+        f"redirect_uri={urllib.parse.quote(OUTLOOK_REDIRECT_URI, safe='')}&"
+        f"scope={urllib.parse.quote(OUTLOOK_SCOPES, safe='')}&"
+        f"code_challenge={challenge}&"
+        f"code_challenge_method=S256"
+    )
+
+    print("\n[!] To authorize, open this link in your browser:\n")
+    print(f"--> {auth_url} <--\n")
+    print(f"Click 'Accept'. You will be redirected to an empty/error page ({OUTLOOK_REDIRECT_URI}).")
+    print("Look at the address bar. Copy the 'code' parameter.")
+
+    code_input = input("Enter the 'code' from the URL (or paste the full URL): ").strip()
+
+    if not code_input:
+        print("Authorization cancelled. Unread count will stay at 0.\n")
+        return
+
+    if 'code=' in code_input:
+        try:
+            parsed = urllib.parse.urlparse(code_input)
+            params = urllib.parse.parse_qs(parsed.query)
+            code = params.get('code', [code_input])[0]
+        except:
+            code = code_input.split('code=')[1].split('&')[0]
+    else:
+        code = code_input
+
+    print("Fetching Access Token...")
+    data = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': OUTLOOK_REDIRECT_URI,
+        'client_id': c_id,
+        'code_verifier': verifier,
+        'scope': OUTLOOK_SCOPES,
+    }
+
+    try:
+        resp = requests.post(API_ENDPOINTS['outlook_token'], data=data)
+        resp.raise_for_status()
+        token_data = resp.json()
+        token_data['client_id'] = c_id
+        token_data['expires_at'] = time.time() + token_data.get('expires_in', 3600)
+
+        with open(OUTLOOK_TOKEN_PATH, 'w') as f:
+            json.dump(token_data, f, indent=4)
+        print("Outlook Authorization Successful!\n")
+    except Exception as e:
+        print(f"Failed to fetch Outlook tokens: {e}")
+
+
+def fetch_outlook_unread_today():
+    if not os.path.exists(OUTLOOK_TOKEN_PATH): return None
+    with open(OUTLOOK_TOKEN_PATH, 'r') as f:
+        token_data = json.load(f)
+
+    c_id = token_data.get('client_id')
+
+    if time.time() > token_data.get('expires_at', 0):
+        # Public client (no client secret) refresh — same PKCE-registered
+        # app, just client_id, no code_verifier needed for this grant type.
+        data = {
+            'grant_type': 'refresh_token',
+            'refresh_token': token_data.get('refresh_token'),
+            'client_id': c_id,
+            'scope': OUTLOOK_SCOPES,
+        }
+        new_token = net.get_json(API_ENDPOINTS['outlook_token'], data=data, method='POST')
+        if new_token and 'access_token' in new_token:
+            token_data.update(new_token)
+            token_data['client_id'] = c_id
+            token_data['expires_at'] = time.time() + new_token.get('expires_in', 3600)
+            with open(OUTLOOK_TOKEN_PATH, 'w') as f:
+                json.dump(token_data, f, indent=4)
+        else:
+            return None
+
+    headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+    # receivedDateTime ge <local midnight, with offset> — Graph's
+    # DateTimeOffset comparison is offset-aware, so no UTC conversion needed,
+    # unlike Gmail's Unix-epoch approach to the same "since local midnight"
+    # problem. Counting len(value) rather than trusting a returned count,
+    # same reasoning as the Gmail widget: it's what's actually returned, not
+    # an estimate.
+    midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    params = {
+        '$filter': f"isRead eq false and receivedDateTime ge {midnight.isoformat()}",
+        '$select': 'id',
+        '$top': 500,
+    }
+
+    try:
+        resp = net.session.get(API_ENDPOINTS['outlook_messages'], headers=headers, params=params, timeout=8)
+    except Exception as e:
+        logging.error(f"Outlook fetch error: {e}")
+        return None
+    if resp.status_code == 401:
+        logging.error("Outlook token rejected (401) - re-run auth_outlook() to re-authorize.")
+        return None
+    if resp.status_code != 200:
+        logging.error(f"Outlook fetch failed: HTTP {resp.status_code} {resp.text[:200]}")
+        return None
+    try:
+        payload = resp.json()
+    except Exception:
+        return None
+    return len(payload.get('value', []))
 
 
 def auth_roborock(email):
@@ -1028,7 +1204,7 @@ def update_data_thread():
                     data_store.ping['history'].append(int(ms))
                 data_store.last_update['ping'] = now
 
-        if now - data_store.last_update['gmail'] > 300:
+        if EMAIL_PROVIDER == 'gmail' and now - data_store.last_update['email'] > 300:
             try:
                 creds = None
                 if os.path.exists(GMAIL_TOKEN_PATH):
@@ -1046,10 +1222,16 @@ def update_data_thread():
                     midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                     query = f"is:unread after:{int(midnight.timestamp())}"
                     result = service.users().messages().list(userId='me', q=query, maxResults=500).execute()
-                    with data_store.lock: data_store.gmail_unread_today = len(result.get('messages', []))
+                    with data_store.lock: data_store.email_unread_today = len(result.get('messages', []))
             except:
                 pass
-            data_store.last_update['gmail'] = now
+            data_store.last_update['email'] = now
+
+        elif EMAIL_PROVIDER == 'outlook' and now - data_store.last_update['email'] > 300:
+            count = fetch_outlook_unread_today()
+            if count is not None:
+                with data_store.lock: data_store.email_unread_today = count
+            data_store.last_update['email'] = now
 
         # Claude Data Fetching (Run external script every 10 min)
         if ENABLE_CLAUDE and now - data_store.last_update['claude'] > 600:
@@ -1285,7 +1467,7 @@ def render_screen(epd, fonts):
         strava = data_store.strava.copy()
         printer = data_store.printer.copy()
         rob = data_store.roborock.copy()
-        gmail_unread_today = data_store.gmail_unread_today
+        email_unread_today = data_store.email_unread_today
         spotify = data_store.spotify.copy()
         claude = data_store.claude.copy()
         antigravity = data_store.antigravity.copy()
@@ -1670,14 +1852,14 @@ def render_screen(epd, fonts):
 
     draw.line((col3_x, 380, epd.width - 20, 380), fill=0, width=2)
 
-    # 3. Gmail
+    # 3. Email (Gmail or Outlook, per EMAIL_PROVIDER)
     gm_y = 400
     gm_icon_size = 60
     draw_icon(draw, col3_x, gm_y, "icon_mail", (gm_icon_size, gm_icon_size))
-    gmail_text = f"Unread Today: {gmail_unread_today}"
-    bbox = draw.textbbox((0, 0), gmail_text, font=fonts['35'])
+    email_text = f"Unread Today: {email_unread_today}"
+    bbox = draw.textbbox((0, 0), email_text, font=fonts['35'])
     text_y = gm_y + (gm_icon_size - (bbox[3] - bbox[1])) / 2 - bbox[1]
-    draw.text((col3_x + 80, text_y), gmail_text, font=fonts['35'], fill=0)
+    draw.text((col3_x + 80, text_y), email_text, font=fonts['35'], fill=0)
 
     return Himage
 
@@ -1709,6 +1891,7 @@ def main():
     auth_strava()
     auth_spotify()
     auth_gmail()
+    auth_outlook()
     auth_claude()
     auth_antigravity()
     auth_codex()

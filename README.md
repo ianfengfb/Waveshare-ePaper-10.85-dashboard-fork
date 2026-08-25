@@ -12,7 +12,7 @@ A fully functional E-ink dashboard running on a Raspberry Pi Zero 1W or 2W. Desi
 * **Bambu Lab 3D Printer:** Live monitoring of print status, completion percentage, remaining time, and current layer progress.
 * **Roborock Vacuum:** Live battery level, current status, and tracking for cleaned area during active cleaning.
 * **Spotify:** Displays the currently playing track and artist.
-* **Gmail:** Tracks the number of unread emails in your primary inbox.
+* **Email (Gmail or Outlook):** Tracks the number of unread emails received today.
 * **System Fallbacks:** Automatically switches to displaying System Load (CPU/RAM usage) or Cryptocurrency prices (BTC/ETH) if certain hardware integrations are disabled or offline for demonstration of dashboard capabilities. The fallback wedgets are not required tokens and ready to go.
 * **Optimized Rendering:** Uses partial screen refreshes to prevent flickering, with scheduled full refreshes to clear e-ink ghosting.
 
@@ -136,18 +136,47 @@ Uses Spotify's own Web API directly (no Last.fm, no local web server needed).
    the terminal. The script fetches and saves the tokens to `spotify_token.json`, and refreshes them
    automatically in the background from then on — no further logins needed.
 
-### Gmail
+### Email (Gmail or Outlook — pick one)
+The "Unread Today" widget reads from whichever provider `EMAIL_PROVIDER` in `main.py` names —
+`"gmail"`, `"outlook"`, or `None` to disable it. Only one can be active at a time. Set up
+whichever one you actually use; the widget itself is always visible either way (it just shows
+`0` until configured).
+
+#### Gmail
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create a project
    (or use an existing one), and enable the **Gmail API** for it.
 2. Create an OAuth Client ID credential, type **Desktop app**. Note the **Client ID** and **Client Secret**
    shown — no file download or redirect URI setup needed for this credential type.
-3. Set `ENABLE_GMAIL = True` in `main.py` and run it (`python main.py` on the Pi, or
+3. Set `EMAIL_PROVIDER = "gmail"` in `main.py` and run it (`python main.py` on the Pi, or
    `python render_preview.py` on Windows/dev machines — both trigger the same one-time setup).
 4. The script pauses, asks for your Client ID/Secret, then prints an authorization URL.
    Open it in your browser, click "Allow", and you'll be redirected to a dead `http://127.0.0.1` page.
 5. Copy the whole URL containing `code=...` from your browser's address bar and paste it back into
    the terminal. The script fetches and saves the tokens to `token.json`, and refreshes them
    automatically in the background from then on — no further logins needed.
+
+#### Outlook / Microsoft 365
+**If this is your work/school (M365) account, read this first:** your organisation's IT policy
+(Conditional Access, tenant-wide app consent restrictions) can block a personal Azure app
+registration entirely, independent of anything below. If step 4 fails with an admin-consent or
+blocked-by-policy error, that's IT policy — ask your admin, or use a personal Microsoft account
+(`@outlook.com`/`@hotmail.com`) instead if that's an option for you.
+1. Go to the [Azure Portal](https://portal.azure.com) → Azure Active Directory → App registrations
+   → New registration. Under "Supported account types" choose **"Personal Microsoft accounts and
+   work/school accounts"**.
+2. On the app's page, go to Authentication → Add a platform → **"Mobile and desktop applications"**
+   → check/add the redirect URI `http://localhost` (one of Azure's own suggested values).
+3. Go to API permissions → Add a permission → Microsoft Graph → Delegated permissions →
+   search for and add **`Mail.Read`**.
+4. Note the **Application (client) ID** from the app's Overview page — no client secret needed
+   (this app type authenticates via PKCE instead, so there's nothing else to copy).
+5. Set `EMAIL_PROVIDER = "outlook"` in `main.py` and run it (`python main.py` on the Pi, or
+   `python render_preview.py` on Windows/dev machines).
+6. The script pauses, asks for the Client ID, then prints an authorization URL. Open it in your
+   browser, click "Accept", and you'll be redirected to a dead `http://localhost` page.
+7. Copy the whole URL containing `code=...` from your browser's address bar and paste it back into
+   the terminal. The script fetches and saves the tokens to `outlook_token.json`, and refreshes
+   them automatically in the background from then on — no further logins needed.
 
 ---
 

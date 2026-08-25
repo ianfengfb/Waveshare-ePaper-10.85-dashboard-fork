@@ -153,11 +153,12 @@ def main():
 
     import main as dashboard  # noqa: E402  (import must follow the mock setup above)
 
-    # One-time interactive setup (e.g. Spotify/Gmail's OAuth code exchange):
-    # a no-op once the relevant ENABLE_* flag is off or the token file
-    # already exists, so this is safe to leave in on every run.
+    # One-time interactive setup (e.g. Spotify/Gmail/Outlook's OAuth code
+    # exchange): a no-op once the relevant flag/mode is off or the token
+    # file already exists, so this is safe to leave in on every run.
     dashboard.auth_spotify()
     dashboard.auth_gmail()
+    dashboard.auth_outlook()
 
     epd = dashboard.epd10in85.EPD()
     epd.init()

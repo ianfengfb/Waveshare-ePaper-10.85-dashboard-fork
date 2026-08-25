@@ -91,26 +91,60 @@ checkout with no credentials configured already renders the fallback widgets
 (System Load, Crypto, Internet Ping, Greeting) instead of the token-gated
 ones (Strava, Bambu, Roborock, Claude/Codex/Antigravity usage, Spotify) —
 this is the project's built-in graceful-degradation design, not something
-the preview pipeline needs to special-case. Weather, the Gmail unread count,
+the preview pipeline needs to special-case. Weather, the email-unread count,
 and the greeting widget's affirmation line are not behind `ENABLE_*` flags:
 weather and the affirmation (from the keyless `affirmations.dev` API) render
 for real whenever there's network access, falling back to
-`GREETING_FALLBACK_AFFIRMATIONS` if that request fails; Gmail unread quietly
-stays at `0` when no `token.json` is present. `ENABLE_GMAIL` exists only to
-gate `auth_gmail()`'s interactive one-time OAuth prompt (so a fresh checkout
-never blocks on `input()`) — the ongoing fetch in `update_data_thread` is
-unconditional and keeps self-gating on `token.json`'s presence, unchanged
-from before that flag existed. Same one-time-authorize-then-refresh-forever
-pattern as `auth_strava()`/`auth_spotify()`, using Google's
-`Credentials`/`to_json()` (already imported for the existing refresh logic)
-to build `token.json` rather than hand-writing its JSON shape.
+`GREETING_FALLBACK_AFFIRMATIONS` if that request fails; email unread quietly
+stays at `0` when `EMAIL_PROVIDER` is `None` or its token file is missing.
 
 The affirmation line is API-sourced text of unpredictable length, unlike
 every other string in this widget — `wrap_lines_limited()` in `main.py`
 word-wraps it to at most 2 lines and ellipsis-truncates (hard-breaking by
 character first, if even a single "word" is wider than the widget) whatever
 doesn't fit, so a long or malformed response can never overflow into the
-divider line or the Gmail widget below it.
+divider line or the email widget below it.
+
+### Email widget: Gmail or Outlook, via EMAIL_PROVIDER
+
+`EMAIL_PROVIDER` (`"gmail"` | `"outlook"` | `None`, defaults `None`) is a
+mode selector, not a pair of `ENABLE_*` flags — exactly one provider (or
+none) can be active, and two independent booleans would allow an
+unrepresentable "both on" state. It gates `auth_gmail()`/`auth_outlook()`'s
+interactive one-time OAuth prompts (so a fresh checkout never blocks on
+`input()`) and which branch of `update_data_thread` fetches into the same
+`data_store.email_unread_today` field; the fetch itself still self-gates on
+its provider's token file, same as before this flag existed. Draw code
+(`render_screen()`'s "3. Email" section) doesn't care which provider is
+active — same field, same icon, same "Unread Today: N" label.
+
+Both providers use the same one-time-authorize-then-refresh-forever pattern
+as `auth_strava()`/`auth_spotify()`, counting `len(messages)` rather than a
+returned/estimated count (same reasoning as Spotify's HTTP 204 handling:
+what's actually returned, not an estimate), scoped to "received since local
+midnight" rather than lifetime unread. Gmail's `after:` filter takes a Unix
+timestamp (timezone-safe regardless of the Pi's locale); Microsoft Graph's
+`receivedDateTime ge <ISO8601 with offset>` is offset-aware natively, so
+`datetime.now().astimezone()` (not the naive `datetime.now()` Gmail's path
+uses) is what makes that comparison correct.
+
+Outlook authenticates as an Azure **public client** (Mobile and desktop
+applications platform type) rather than a confidential client like
+Gmail/Spotify — no client secret exists to protect, so it authenticates via
+PKCE instead (`_pkce_pair()`): a random `code_verifier` and its
+SHA-256-derived `code_challenge` (RFC 7636), generated fresh per
+`auth_outlook()` call and never persisted, since the verifier is only
+needed within that one authorization-code exchange. `OUTLOOK_REDIRECT_URI`
+is `http://localhost` — one of Azure's own suggested values for this client
+type, chosen specifically to avoid a repeat of Spotify's redirect-URI
+back-and-forth.
+
+**Work/school (M365) accounts are not guaranteed to work** — this is a
+policy question on Microsoft's/the tenant's side, not something fixable in
+this code: Conditional Access and tenant-wide app consent restrictions can
+block a personal Azure app registration outright. `auth_outlook()` prints a
+warning about this before the browser step; a personal Microsoft account
+(`@outlook.com`/`@hotmail.com`) has none of these restrictions.
 
 ### Middle column: Spotify now-playing, not Weather
 
@@ -264,11 +298,20 @@ until asked:
 1. **Todo widget** — fetches `GET /api/top-todos` from the companion app
    above, replacing an existing widget slot. Same shared-secret header and
    fetch → parse → draw → fallback pattern as every other widget.
-2. **Outlook unread count** replacing the Gmail widget: swap the fetch layer
-   for Microsoft Graph (delegated permission, own mailbox) — draw logic is
-   unchanged. Confirm with IT before investing effort if targeting a
-   corporate M365 tenant (Conditional Access / admin consent can block a
-   personal Azure app registration entirely).
+2. **Remote widget config via `/api/widget-config`** — right now
+   `EMAIL_PROVIDER` (and every `ENABLE_*` flag) is a local edit-and-redeploy
+   constant. Once the companion app exists, have `update_data_thread` poll
+   `/api/widget-config` on its own timer (independent of `/api/top-todos`,
+   per the one-endpoint-per-resource rule above) and let its response
+   override these at runtime. Proposed shape, extensible as more remote
+   toggles are needed — add fields, don't restructure what's already there:
+   ```json
+   { "email_provider": "gmail" }
+   ```
+   `email_provider` mirrors `EMAIL_PROVIDER`'s exact values (`"gmail"` /
+   `"outlook"` / `null`). Missing/unrecognised values should fall back to
+   the local constant, not disable the widget — a remote-config outage must
+   degrade like every other fetch in this file, not change behaviour.
 3. **iPhone steps (yesterday only)**: push, not pull — an iOS Shortcuts
    automation POSTs the daily total to a small Flask receiver running on the
    Pi's LAN; the dashboard reads the stored value. (Strava is the fallback
@@ -276,7 +319,10 @@ until asked:
 4. **Spotify now-playing** is already implemented via Spotify's own Web API
    (`SPOTIFY_CONF`, see above) and lives in the middle column (replacing
    Weather) — no work needed on the widget itself.
-5. **More middle-column widgets**: the Spotify widget doesn't fill the
+5. **Gmail vs Outlook** is already implemented via `EMAIL_PROVIDER` (see
+   above) — no work needed on the widget itself, only on wiring item 2 in
+   once the companion app exists.
+6. **More middle-column widgets**: the Spotify widget doesn't fill the
    whole column, and weather's slot is otherwise idle now. Candidates for
    filling the remaining space, not yet scoped: a compact weather summary,
    a second usage/status widget, or something else entirely — ask before

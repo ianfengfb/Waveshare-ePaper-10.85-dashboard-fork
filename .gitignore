@@ -18,5 +18,6 @@ codex_usage.json
 limits.json
 strava_token.json
 spotify_token.json
+outlook_token.json
 roborock_session.pkl
 roborock_stats.json
