@@ -1516,8 +1516,8 @@ def render_screen(epd, fonts):
     if ENABLE_TODO:
         content_w = col_w - 20 - col1_x
 
-        draw_icon(draw, col1_x, 15, "icon_rocket", (32, 32))
-        draw.text((col1_x + 45, 15), "TODAY'S TASKS", font=fonts['28'], fill=0)
+        draw_icon(draw, col1_x, 15, "icon_task", (32, 32))
+        draw.text((col1_x + 45, 15), "TASKS OF THE DAY", font=fonts['28'], fill=0)
         draw.line((col1_x, 60, col1_x + content_w, 60), fill=0, width=2)
 
         row_top, row_bottom = 75, 460
