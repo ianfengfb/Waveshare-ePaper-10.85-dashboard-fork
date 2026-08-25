@@ -253,6 +253,60 @@ ever needed — derive the GB2312/Big5 code point lists via Python's built-in
 codecs (`bytes([hi, lo]).decode('gb2312')` swept over the valid byte range)
 rather than guessing a Unicode range, since neither is contiguous.
 
+### Middle column: hydration/growth widget temporarily overlays Spotify
+
+`ENABLE_WATER = False` by default. When on, `render_screen()`'s
+`elif not ENABLE_WEATHER:` branch (the same slot Spotify already took over
+from Weather) checks a `show_water` flag before choosing Spotify vs. the
+hydration widget — `ENABLE_WATER` and a water log within the last
+`WATER_SHOW_SECONDS` (60) of now. Has no effect while `ENABLE_WEATHER` is
+`True`: weather keeps priority over this slot, same as it already does over
+Spotify.
+
+**Timing piggybacks on the existing render loop instead of a dedicated
+timer.** `main()`'s loop already redraws the whole screen roughly once a
+minute (`sleep_time = max(5, 60 - elapsed)`). `show_water` just re-checks
+"was the last log within the last 60s?" on every one of those redraws, so
+the widget naturally appears on the first redraw after a log and disappears
+on the redraw after that — no extra thread, timer, or scheduling needed.
+The trade-off: because it's tied to that ~60s cadence rather than reacting
+instantly, the widget can take up to ~60s after the real-world log to first
+appear (whichever redraw happens to catch it), and it stays up for roughly
+one redraw cycle rather than exactly 60.00s. Acceptable for a low-stakes
+encouragement widget; not worth extra redraws (and extra e-ink wear) to
+tighten.
+
+**Growth is calendar-month cumulative, not daily.** A realistic 3-4
+logs/day would never fill a tree within 24h, and resetting to a seed every
+morning would undercut the "watch it grow" reward — so `data_store.water`
+carries a running month total (`total_litres_month`) that the companion app
+computes server-side (D1 query over the calendar month), not something the
+Pi derives itself. The Pi only ever divides that total by
+`WATER_GROWTH_TARGET_LITRES` (currently 60L/month) to get a 0.0-1.0 growth
+fraction — no date math on this side at all.
+
+**The plant is drawn procedurally (`draw_growth_plant()`), not as a set of
+stage bitmaps.** A single growth fraction continuously scales trunk
+height/width and canopy blob size/count, the same "draw it with Pillow
+primitives" approach the sparklines and checkboxes already use, rather than
+mapping ranges of litres to a handful of discrete images — no art assets to
+commission, and no "which bitmap for 23.7L" boundary logic to get wrong.
+Below ~8% growth only a soil mound shows (reads as "a seed waiting to
+grow" rather than a blank column); below ~20% it's two seed leaves on a
+short stem rather than a full canopy, since a circle cluster that small
+just reads as a blob.
+
+`data_store.water` defaults to `{'total_litres_month': 0.0,
+'last_logged_at': None, 'last_amount_litres': None}` — `last_logged_at:
+None` always keeps `show_water` false, so a fresh checkout (or before the
+companion app's water endpoint is wired in) never shows the widget, same
+degrade-to-safe-default convention as every other credentialed/unwired
+widget in this file. `icons/icon_droplet.bmp` is a hand-drawn bold water
+drop (no existing icon fit "hydration"), made the same way as
+`icons/icon_task.bmp` — a filled ellipse plus a triangular tip, rendered at
+10x scale and downsampled for anti-aliasing, matching the bold/filled style
+of the rest of the icon set.
+
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
 `fnt/Aldrich-Regular.ttc` and `fnt/advanced_led_board-7.ttc` (the only two
@@ -367,6 +421,23 @@ until asked:
    filling the remaining space, not yet scoped: a compact weather summary,
    a second usage/status widget, or something else entirely — ask before
    picking one.
+7. **Hydration/growth widget fetch** — the draw side is already built
+   (`ENABLE_WATER`, see above); still needs `update_data_thread` to call a
+   new `GET /api/water-status` on the companion app and populate
+   `data_store.water`, replacing its always-empty default. Same
+   shared-secret header and fetch → parse → fallback pattern as every other
+   widget. Proposed shape:
+   ```json
+   { "total_litres_month": 21.0, "last_logged_at": "2026-08-25T14:32:00Z", "last_amount_litres": 1.0 }
+   ```
+   `total_litres_month` should already be the calendar-month running total
+   computed server-side (a D1 query), not raw log rows — the Pi does no
+   date math, it only divides by `WATER_GROWTH_TARGET_LITRES`.
+   `last_logged_at` should be stamped server-side when the log is inserted
+   (not client-supplied), so device clock drift on whatever she logs from
+   can't fool the "was this within the last minute" check. On the Pi side,
+   convert it to a Unix timestamp for `data_store.water['last_logged_at']`
+   — that's what `show_water`'s `time.time() - ...` comparison expects.
 
 ## Conventions
 

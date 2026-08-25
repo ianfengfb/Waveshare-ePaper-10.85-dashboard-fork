@@ -64,6 +64,13 @@ ENABLE_SPOTIFY = False
 # is False. Kept as a toggle (not deleted) so weather can come back on this
 # or another slot later — see CLAUDE.md roadmap.
 ENABLE_WEATHER = False
+# Temporarily overlays the hydration/growth widget on top of Spotify in the
+# middle column for WATER_SHOW_SECONDS right after a fresh water log arrives
+# from the companion app, then reverts to Spotify on its own — see
+# WATER_GROWTH_TARGET_LITRES below and CLAUDE.md for how the timing and
+# growth scale work. Has no effect while ENABLE_WEATHER is True (weather
+# keeps priority over this slot, same as it already does over Spotify).
+ENABLE_WATER = False
 # The left column shows the Tasks widget instead of System Load/Crypto/Ping
 # (and their Strava/Bambu/Roborock/Antigravity/Codex alternates) while this
 # is True — same "one column, one active widget" pattern as ENABLE_WEATHER.
@@ -159,6 +166,23 @@ TODO_PLACEHOLDER_TASKS = [
     {"title": "Review pull request", "due": None, "completed": False},
     {"title": "Plan weekend trip", "due": "6:00 PM", "completed": False},
 ]
+
+# --- HYDRATION / GROWTH WIDGET ---
+# Growth is calendar-month cumulative, not daily — a handful of logs a day
+# realistically won't fill a tree within 24h, and resetting to a seed every
+# morning would work against the "watch it grow" reward. The companion app
+# computes the running month total server-side (see CLAUDE.md roadmap); the
+# Pi only ever displays whatever total it's given, no date math here.
+WATER_GROWTH_TARGET_LITRES = 60.0  # litres logged this month for a fully-grown tree
+# How long the widget stays up after a fresh log before reverting to
+# Spotify. Deliberately matched to main()'s existing ~60s screen-redraw
+# cadence rather than a dedicated timer/thread: each redraw just checks
+# whether the last log happened within this window, so the widget naturally
+# appears on the next redraw after a log and disappears on the one after
+# that — no extra scheduling needed. One consequence of piggybacking on that
+# cadence: it can take up to ~60s after the real-world log for the widget to
+# first appear (whichever redraw catches it), not instantaneously.
+WATER_SHOW_SECONDS = 60
 
 PRINTER_CONF = {
     'IP': '192.168....',
@@ -372,6 +396,10 @@ class DataStore:
         self.ping = {'current': 0, 'history': deque(maxlen=50)}
         self.affirmation = random.choice(GREETING_FALLBACK_AFFIRMATIONS)
         self.todos = list(TODO_PLACEHOLDER_TASKS)
+        # last_logged_at is a Unix timestamp (seconds); None means "no log
+        # seen yet", which always keeps the widget hidden — a safe default
+        # until GET /api/water-status is wired in (see CLAUDE.md roadmap).
+        self.water = {'total_litres_month': 0.0, 'last_logged_at': None, 'last_amount_litres': None}
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
@@ -1445,6 +1473,50 @@ def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
         draw.rectangle((x, y, x + size[0], y + size[1]), outline=255 if is_white else 0)
 
 
+def draw_growth_plant(draw, cx, ground_y, max_trunk_height, growth_fraction):
+    """Procedural tree, from bare soil to a full canopy, driven by a single
+    0.0-1.0 fraction — trunk height/width and canopy size/blob count all
+    scale continuously from it, rather than switching between a handful of
+    discrete stage images. Keeps this in step with the exact litre total
+    (no "which bitmap" mapping to maintain) and needs no extra art assets,
+    matching how the rest of the dashboard draws things (sparklines,
+    checkboxes) instead of importing icons for everything."""
+    t = max(0.0, min(1.0, growth_fraction))
+
+    # Soil mound — drawn even at t=0 so "nothing logged yet" still reads as
+    # "a seed waiting to grow" rather than an empty blank column.
+    draw.ellipse((cx - 30, ground_y - 6, cx + 30, ground_y + 6), fill=0)
+    if t < 0.08:
+        return
+
+    trunk_h = 20 + t * (max_trunk_height - 20)
+    trunk_w = 5 + t * 9
+    trunk_top = ground_y - trunk_h
+    draw.rectangle((cx - trunk_w / 2, trunk_top, cx + trunk_w / 2, ground_y - 4), fill=0)
+
+    if t < 0.2:
+        # Sprout stage: two curved seed leaves instead of a full canopy —
+        # a cluster of overlapping circles this small just reads as a blob.
+        leaf_r = 8 + t * 20
+        draw.ellipse((cx - leaf_r * 1.6, trunk_top - leaf_r * 0.6, cx - leaf_r * 0.2, trunk_top + leaf_r * 0.6), fill=0)
+        draw.ellipse((cx + leaf_r * 0.2, trunk_top - leaf_r * 0.6, cx + leaf_r * 1.6, trunk_top + leaf_r * 0.6), fill=0)
+        return
+
+    # Canopy: a ring of overlapping circles plus a center blob to fill the
+    # gaps — both the ring radius and the blob count grow with t, so the
+    # canopy fills out gradually instead of jumping straight to full size.
+    canopy_r = 18 + t * 60
+    blob_r = canopy_r * 0.55
+    canopy_cy = trunk_top - canopy_r * 0.3
+    n_blobs = 3 + int(t * 4)
+    for i in range(n_blobs):
+        angle = (2 * math.pi * i / n_blobs) - math.pi / 2
+        bx = cx + canopy_r * 0.5 * math.cos(angle)
+        by = canopy_cy + canopy_r * 0.3 * math.sin(angle)
+        draw.ellipse((bx - blob_r, by - blob_r, bx + blob_r, by + blob_r), fill=0)
+    draw.ellipse((cx - blob_r, canopy_cy - blob_r, cx + blob_r, canopy_cy + blob_r), fill=0)
+
+
 def draw_sparkline(draw, x, y, data, max_items=50, width=400, height=60, color=0, style="bar"):
     if not data: return
     max_val = max(data) if max(data) > 0 else 1
@@ -1505,6 +1577,7 @@ def render_screen(epd, fonts):
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
         todos = data_store.todos.copy()
+        water = data_store.water.copy()
     finally:
         data_store.lock.release()
 
@@ -1814,49 +1887,82 @@ def render_screen(epd, fonts):
                 draw.text((off_x + 15, 440), f"{f_temp}°C", font=fonts['24'], fill=0)
 
     elif not ENABLE_WEATHER:
-        # Fallback: Spotify now-playing (replaces Weather in this slot)
-        draw_icon(draw, col2_x, 20, "icon_spotify", (40, 40))
-        draw.text((col2_x + 50, 28), "SPOTIFY", font=fonts['28'], fill=0)
-        draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
+        water_last_logged_at = water.get('last_logged_at')
+        show_water = (
+            ENABLE_WATER and water_last_logged_at is not None
+            and (time.time() - water_last_logged_at) < WATER_SHOW_SECONDS
+        )
 
-        content_w = col_w - 40
-        art_size = SPOTIFY_ART_SIZE
-        art_x = col2_x + max(0, (content_w - art_size) / 2)
-        art_y = 105
+        if show_water:
+            # Fallback: hydration/growth widget — temporarily overlays
+            # Spotify for WATER_SHOW_SECONDS right after a fresh water log,
+            # then reverts on its own once show_water goes false again on a
+            # later redraw (see WATER_SHOW_SECONDS above for why no
+            # dedicated timer is needed).
+            draw_icon(draw, col2_x, 20, "icon_droplet", (40, 40))
+            draw.text((col2_x + 50, 28), "STAY HYDRATED", font=fonts['28'], fill=0)
+            draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
 
-        if spotify['status'] == 'PLAYING':
-            if spotify['cover']:
-                Himage.paste(spotify['cover'], (int(art_x), art_y))
+            content_w = col_w - 40
+            cx = col2_x + content_w / 2
+            ground_y = 415
+            total_month = water.get('total_litres_month', 0.0)
+            growth_fraction = total_month / WATER_GROWTH_TARGET_LITRES
+            draw_growth_plant(draw, cx, ground_y, 230, growth_fraction)
+
+            total_text = f"{total_month:.1f} L this month"
+            tw = text_width(draw, total_text, fonts['28'])
+            draw.text((col2_x + max(0, (content_w - tw) / 2), ground_y + 15), total_text, font=fonts['28'], fill=0)
+
+            last_amount = water.get('last_amount_litres')
+            sub_text = f"+{last_amount:.1f} L just logged!" if last_amount else "New log recorded!"
+            sw = text_width(draw, sub_text, fonts['20'])
+            draw.text((col2_x + max(0, (content_w - sw) / 2), ground_y + 50), sub_text, font=fonts['20'], fill=0)
+
+        else:
+            # Fallback: Spotify now-playing (replaces Weather in this slot)
+            draw_icon(draw, col2_x, 20, "icon_spotify", (40, 40))
+            draw.text((col2_x + 50, 28), "SPOTIFY", font=fonts['28'], fill=0)
+            draw.line((col2_x, 85, col2_x + col_w - 40, 85), fill=0, width=2)
+
+            content_w = col_w - 40
+            art_size = SPOTIFY_ART_SIZE
+            art_x = col2_x + max(0, (content_w - art_size) / 2)
+            art_y = 105
+
+            if spotify['status'] == 'PLAYING':
+                if spotify['cover']:
+                    Himage.paste(spotify['cover'], (int(art_x), art_y))
+                else:
+                    draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
+
+                draw_icon(draw, int(art_x + (art_size - 40) / 2), art_y + art_size + 15, "icon_play", (40, 40))
+
+                # Artist/track names are external (Spotify) text of unpredictable
+                # length and character width, like the affirmation line — a
+                # naive character-count slice can still overflow the column, so
+                # measure and ellipsis-truncate in pixels instead. They may also
+                # be in Chinese/Japanese/Russian, which Aldrich can't render at
+                # all (see needs_intl_font()) — pick the font per field first,
+                # since wrapping/measuring both depend on which font is used.
+                words = spotify['text'].split(' - ')
+                artist_raw = words[0] if len(words) > 0 else "Unknown"
+                track_raw = words[1] if len(words) > 1 else ""
+                artist_font = fonts['intl_28'] if needs_intl_font(artist_raw) else fonts['28']
+                track_font = fonts['intl_24'] if needs_intl_font(track_raw) else fonts['24']
+                artist = wrap_lines_limited(draw, artist_raw, artist_font, content_w, max_lines=1)[0] if artist_raw else ""
+                track = wrap_lines_limited(draw, track_raw, track_font, content_w, max_lines=1)[0] if track_raw else ""
+
+                row_y = art_y + art_size + 70
+                aw = text_width(draw, artist, artist_font)
+                draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=artist_font, fill=0)
+                tw = text_width(draw, track, track_font)
+                draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=track_font, fill=0)
             else:
                 draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
-
-            draw_icon(draw, int(art_x + (art_size - 40) / 2), art_y + art_size + 15, "icon_play", (40, 40))
-
-            # Artist/track names are external (Spotify) text of unpredictable
-            # length and character width, like the affirmation line — a
-            # naive character-count slice can still overflow the column, so
-            # measure and ellipsis-truncate in pixels instead. They may also
-            # be in Chinese/Japanese/Russian, which Aldrich can't render at
-            # all (see needs_intl_font()) — pick the font per field first,
-            # since wrapping/measuring both depend on which font is used.
-            words = spotify['text'].split(' - ')
-            artist_raw = words[0] if len(words) > 0 else "Unknown"
-            track_raw = words[1] if len(words) > 1 else ""
-            artist_font = fonts['intl_28'] if needs_intl_font(artist_raw) else fonts['28']
-            track_font = fonts['intl_24'] if needs_intl_font(track_raw) else fonts['24']
-            artist = wrap_lines_limited(draw, artist_raw, artist_font, content_w, max_lines=1)[0] if artist_raw else ""
-            track = wrap_lines_limited(draw, track_raw, track_font, content_w, max_lines=1)[0] if track_raw else ""
-
-            row_y = art_y + art_size + 70
-            aw = text_width(draw, artist, artist_font)
-            draw.text((col2_x + max(0, (content_w - aw) / 2), row_y), artist, font=artist_font, fill=0)
-            tw = text_width(draw, track, track_font)
-            draw.text((col2_x + max(0, (content_w - tw) / 2), row_y + 40), track, font=track_font, fill=0)
-        else:
-            draw_icon(draw, int(art_x), art_y, "icon_spotify", (art_size, art_size))
-            msg = "Nothing Playing"
-            mw = text_width(draw, msg, fonts['28'])
-            draw.text((col2_x + max(0, (content_w - mw) / 2), art_y + art_size + 40), msg, font=fonts['28'], fill=0)
+                msg = "Nothing Playing"
+                mw = text_width(draw, msg, fonts['28'])
+                draw.text((col2_x + max(0, (content_w - mw) / 2), art_y + art_size + 40), msg, font=fonts['28'], fill=0)
 
     draw.line((col_w * 2, 10, col_w * 2, 470), fill=0, width=2)
 
