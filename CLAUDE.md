@@ -146,6 +146,30 @@ block a personal Azure app registration outright. `auth_outlook()` prints a
 warning about this before the browser step; a personal Microsoft account
 (`@outlook.com`/`@hotmail.com`) has none of these restrictions.
 
+### Left column: Tasks, hiding System Load/Crypto/Ping (and their alternates)
+
+`ENABLE_TODO = False` by default — when `True`, `render_screen()`'s Column 1
+takes the `if ENABLE_TODO: ... else: <all three existing widget slots>`
+branch, so the Tasks widget replaces System Load/Strava, Crypto/Bambu, *and*
+Ping/Roborock/Antigravity/Codex all at once rather than swapping just one of
+the three stacked slots — it's a whole-column takeover, same shape as
+`ENABLE_WEATHER` but for three slots instead of one.
+
+`TODO_MAX_TASKS` (currently 5) always reserves that many row slots — fewer
+real tasks just leave empty checkbox rows rather than resizing the rows, so
+the layout doesn't jump around as the count changes day to day. Row height
+is computed from `TODO_MAX_TASKS` rather than hardcoded, so changing the
+constant needs no other edits. `data_store.todos` is a list of
+`{"title": str, "due": str | None}` dicts — `TODO_PLACEHOLDER_TASKS` seeds
+it until the roadmap's `GET /api/top-todos` fetch is wired in (see above).
+
+Task titles and due-time strings are external text like the affirmation
+line and Spotify's artist/track fields — `wrap_lines_limited(..., max_lines=1)`
+truncates each independently in pixels rather than assuming they fit,
+same helper, same reasoning. The due-time column budget (100px) is sized
+off measuring a real "HH:MM AM/PM" string (~94px at `fonts['20']`), not a
+round number — an untested guess here undercounted it once already.
+
 ### Middle column: Spotify now-playing, not Weather
 
 `ENABLE_WEATHER = False` by default — the middle column shows the Spotify
@@ -295,9 +319,13 @@ These are planned follow-ups; each is its own scoped session. Keep the
 render/drive split in mind when touching related code, but don't build these
 until asked:
 
-1. **Todo widget** — fetches `GET /api/top-todos` from the companion app
-   above, replacing an existing widget slot. Same shared-secret header and
-   fetch → parse → draw → fallback pattern as every other widget.
+1. **Todo widget fetch** — the draw side is already built (`ENABLE_TODO`,
+   see below); still needs `update_data_thread` to actually call
+   `GET /api/top-todos` from the companion app above and populate
+   `data_store.todos`, replacing `TODO_PLACEHOLDER_TASKS`. Same shared-secret
+   header and fetch → parse → fallback pattern as every other widget — each
+   task dict should keep the `{"title": ..., "due": ...}` shape (`due`
+   nullable) the draw code already expects.
 2. **Remote widget config via `/api/widget-config`** — right now
    `EMAIL_PROVIDER` (and every `ENABLE_*` flag) is a local edit-and-redeploy
    constant. Once the companion app exists, have `update_data_thread` poll

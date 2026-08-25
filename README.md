@@ -3,6 +3,9 @@
 A fully functional E-ink dashboard running on a Raspberry Pi Zero 1W or 2W. Designed for large Waveshare e-Paper displays (e.g., 10.85"), this project aggregates essential daily information and smart home status into a clean, minimalist interface.
 
 ## Key Features
+* **(NEW!) Tasks widget:** Shows today's top tasks (title + optional due time) in the left column,
+  replacing System Load/Crypto/Ping. Placeholder data for now (`ENABLE_TODO`, `TODO_PLACEHOLDER_TASKS`
+  in `main.py`) — a real fetch will land once the companion todo-list app exists.
 * **(NEW!) Now supporting both Raspberry Pi Zero 1 & 2!**
 * **(NEW!) Codex usage data:** Displays usage data for Codex, showing the limit, and limit reset time.
 * **Antigravity usage data:** Displays usage data for Antigravity, showing the limit, and limit reset time.

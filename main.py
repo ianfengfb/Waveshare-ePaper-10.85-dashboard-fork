@@ -64,6 +64,13 @@ ENABLE_SPOTIFY = False
 # is False. Kept as a toggle (not deleted) so weather can come back on this
 # or another slot later — see CLAUDE.md roadmap.
 ENABLE_WEATHER = False
+# The left column shows the Tasks widget instead of System Load/Crypto/Ping
+# (and their Strava/Bambu/Roborock/Antigravity/Codex alternates) while this
+# is True — same "one column, one active widget" pattern as ENABLE_WEATHER.
+# Placeholder data only for now (TODO_PLACEHOLDER_TASKS below) — real data
+# will come from the companion app's GET /api/top-todos once it exists, see
+# CLAUDE.md roadmap.
+ENABLE_TODO = False
 # Which email account the "Unread Today" widget reads from: "gmail",
 # "outlook", or None to disable it (shows 0, makes no API calls at all — the
 # widget itself is otherwise unconditional and always visible). A single
@@ -131,6 +138,25 @@ GREETING_FALLBACK_AFFIRMATIONS = [
     "You are stronger than you know.",
     "Today has good things waiting for you.",
     "You've got this, one step at a time.",
+]
+
+# --- TASKS WIDGET ---
+# How many task rows the widget always reserves space for, regardless of how
+# many real tasks come back — a short list just leaves empty rows rather
+# than resizing them, so the layout doesn't jump around. May change later
+# once the companion app's GET /api/top-todos is wired in; row height is
+# computed from this rather than hardcoded, so changing it needs no other
+# edits.
+TODO_MAX_TASKS = 5
+# Placeholder content until GET /api/top-todos exists (see CLAUDE.md
+# roadmap) — a realistic mix of with/without a due time, since "due" is
+# meant to be optional per task.
+TODO_PLACEHOLDER_TASKS = [
+    {"title": "Finish quarterly report", "due": "2:00 PM"},
+    {"title": "Buy groceries", "due": None},
+    {"title": "Call dentist", "due": "10:30 AM"},
+    {"title": "Review pull request", "due": None},
+    {"title": "Plan weekend trip", "due": "6:00 PM"},
 ]
 
 PRINTER_CONF = {
@@ -344,6 +370,7 @@ class DataStore:
         self.crypto = {'btc': 0, 'eth': 0, 'btc_hist': [], 'eth_hist': []}
         self.ping = {'current': 0, 'history': deque(maxlen=50)}
         self.affirmation = random.choice(GREETING_FALLBACK_AFFIRMATIONS)
+        self.todos = list(TODO_PLACEHOLDER_TASKS)
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
@@ -1476,130 +1503,175 @@ def render_screen(epd, fonts):
         crypto = data_store.crypto.copy()
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
+        todos = data_store.todos.copy()
     finally:
         data_store.lock.release()
 
     col_w = epd.width // 3
 
-    # --- COLUMN 1 (Widgets) ---
+    # --- COLUMN 1 (Widgets, or Tasks) ---
     col1_x = 20
 
-    # Widget 1: Strava or SysLoad
-    y1 = 20
-    if ENABLE_STRAVA:
-        draw_icon(draw, col1_x, y1, "icon_strava", (60, 60))
-        draw.text((col1_x + 70, y1), "STRAVA STATS", font=fonts['28'], fill=0)
+    if ENABLE_TODO:
+        content_w = col_w - 20 - col1_x
 
-        now_y = datetime.now().year
-        draw.text((col1_x + 70, y1 + 35),
-                  f"{now_y}: {strava.get('distance_curr', 0)} km | {now_y - 1}: {strava.get('distance_prev', 0)} km",
-                  font=fonts['20'], fill=0)
-        draw.text((col1_x + 70, y1 + 60),
-                  f"Total: {strava.get('total_distance', 0)} km | {strava.get('rides', 0)} acts", font=fonts['20'],
-                  fill=0)
+        draw_icon(draw, col1_x, 15, "icon_rocket", (32, 32))
+        draw.text((col1_x + 45, 15), "TODAY'S TASKS", font=fonts['28'], fill=0)
+        draw.line((col1_x, 60, col1_x + content_w, 60), fill=0, width=2)
 
-        draw_icon(draw, col1_x + 70, y1 + 85, "icon_bike", (30, 30))
-        draw.text((col1_x + 105, y1 + 90), f"{strava.get('bike_total', 0)} km", font=fonts['20'], fill=0)
+        row_top, row_bottom = 75, 460
+        row_h = (row_bottom - row_top) / TODO_MAX_TASKS
+        checkbox_size = 16
+        # Wide enough for "HH:MM AM/PM" (measured ~94px at fonts['20']) with
+        # a small margin — not just a round number, since that string is
+        # wider than it looks.
+        due_col_w = 100
+        title_x = col1_x + checkbox_size + 8
+        title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
 
-        draw_icon(draw, col1_x + 220, y1 + 85, "icon_hike", (30, 30))
-        draw.text((col1_x + 255, y1 + 90), f"{strava.get('hike_total', 0)} km", font=fonts['20'], fill=0)
+        for i in range(TODO_MAX_TASKS):
+            row_y = row_top + i * row_h
+            cb_y = row_y + 4
+            draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
+
+            if i < len(todos):
+                task = todos[i]
+                # Task titles will eventually be arbitrary text from the
+                # companion app's API — same "unpredictable external text"
+                # category as artist/track names and the affirmation line,
+                # so truncate in pixels rather than assume they fit.
+                title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
+                title = title[0] if title else ''
+                draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
+
+                due = task.get('due')
+                if due:
+                    due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
+                    due_text = due_line[0] if due_line else ''
+                    dw = text_width(draw, due_text, fonts['20'])
+                    draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
+
+            if i < TODO_MAX_TASKS - 1:
+                sep_y = row_y + row_h - 6
+                draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
 
     else:
-        draw_icon(draw, col1_x, y1, "icon_cpu", (50, 50))
-        draw.text((col1_x + 60, y1), f"SYSTEM LOAD: {sysload['cpu']}%", font=fonts['28'], fill=0)
-        draw.text((col1_x + 60, y1 + 35), f"RAM Free: {sysload['ram_free']} MB", font=fonts['20'], fill=0)
-        draw_sparkline(draw, col1_x + 60, y1 + 60, list(sysload['history']), max_items=30, width=350, height=40,
-                       style="bar")
-
-    draw.line((col1_x, 150, col_w - 20, 150), fill=0, width=2)
-
-    # Widget 2: Bambu or Crypto
-    y2 = 170
-    if ENABLE_BAMBU:
-        p_status = str(printer.get('status', 'OFFLINE')).upper()
-        draw_icon(draw, col1_x, y2, "icon_3d", (60, 60))
-        draw.text((col1_x + 70, y2), f"PRINTER: {p_status}", font=fonts['28'], fill=0)
-        if p_status not in ["OFFLINE", "UNKNOWN", "FINISH"]:
-            percent = printer.get('percentage', 0)
-            draw.rectangle((col1_x + 70, y2 + 40, col1_x + 400, y2 + 60), outline=0)
-            draw.rectangle((col1_x + 70, y2 + 40, col1_x + 70 + int(330 * (percent / 100)), y2 + 60), fill=0)
-            draw.text((col1_x + 70, y2 + 70),
-                      f"{percent}% | Rem: {printer.get('remaining_time', '0')}m | {printer.get('layers', '0/0')} L",
+        # Widget 1: Strava or SysLoad
+        y1 = 20
+        if ENABLE_STRAVA:
+            draw_icon(draw, col1_x, y1, "icon_strava", (60, 60))
+            draw.text((col1_x + 70, y1), "STRAVA STATS", font=fonts['28'], fill=0)
+    
+            now_y = datetime.now().year
+            draw.text((col1_x + 70, y1 + 35),
+                      f"{now_y}: {strava.get('distance_curr', 0)} km | {now_y - 1}: {strava.get('distance_prev', 0)} km",
                       font=fonts['20'], fill=0)
-    else:
-        draw_icon(draw, col1_x, y2, "icon_btc", (50, 50))
-        draw.text((col1_x + 60, y2), f"BTC: ${crypto['btc']}", font=fonts['28'], fill=0)
-        draw_sparkline(draw, col1_x + 60, y2 + 35, crypto['btc_hist'], max_items=50, width=350, height=35, style="bar")
-
-        draw_icon(draw, col1_x, y2 + 80, "icon_eth", (50, 50))
-        draw.text((col1_x + 60, y2 + 80), f"ETH: ${crypto['eth']}", font=fonts['28'], fill=0)
-        draw_sparkline(draw, col1_x + 60, y2 + 115, crypto['eth_hist'], max_items=50, width=350, height=35, style="bar")
-
-    draw.line((col1_x, 320, col_w - 20, 320), fill=0, width=2)
-
-    # Widget 3: Roborock or Ping
-    y3 = 340
-    if ENABLE_ROBOROCK:
-        draw_icon(draw, col1_x, y3, "icon_roborock", (50, 50))
-        draw.text((col1_x + 60, y3), f"Bat: {rob['battery']}% | {rob['status']}", font=fonts['28'], fill=0)
-        if rob['is_cleaning']:
-            draw.text((col1_x + 60, y3 + 35), f"Clean: {rob['current_area']:.1f} m2 ({rob['pct']:.0f}%)",
-                      font=fonts['24'], fill=0)
-            clamped_pct = min(rob['pct'], 100)
-            draw.rectangle((col1_x + 60, y3 + 70, col1_x + 390, y3 + 90), outline=0)
-            draw.rectangle((col1_x + 60, y3 + 70, col1_x + 60 + int(330 * (clamped_pct / 100)), y3 + 90), fill=0)
-        else:
-            draw.text((col1_x + 60, y3 + 35), f"Last: {rob['last_date']} | {rob['ref_area']:.1f} m2", font=fonts['24'],
+            draw.text((col1_x + 70, y1 + 60),
+                      f"Total: {strava.get('total_distance', 0)} km | {strava.get('rides', 0)} acts", font=fonts['20'],
                       fill=0)
-    elif ENABLE_ANTIGRAVITY:
-        draw_icon(draw, col1_x, y3, "icon_cpu", (50, 50))
-        draw.text((col1_x + 60, y3), "ANTIGRAVITY USAGE", font=fonts['28'], fill=0)
-        
-        if antigravity.get('error'):
-            draw.text((col1_x + 60, y3 + 35), "Error loading data", font=fonts['20'], fill=0)
+    
+            draw_icon(draw, col1_x + 70, y1 + 85, "icon_bike", (30, 30))
+            draw.text((col1_x + 105, y1 + 90), f"{strava.get('bike_total', 0)} km", font=fonts['20'], fill=0)
+    
+            draw_icon(draw, col1_x + 220, y1 + 85, "icon_hike", (30, 30))
+            draw.text((col1_x + 255, y1 + 90), f"{strava.get('hike_total', 0)} km", font=fonts['20'], fill=0)
+    
         else:
-            models = antigravity.get('models', [])
-            opus = next((m for m in models if m.get('modelId') == 'claude-opus-4-6-thinking'), None)
-            gemini = next((m for m in models if m.get('modelId') == 'gemini-3-pro-high'), None)
+            draw_icon(draw, col1_x, y1, "icon_cpu", (50, 50))
+            draw.text((col1_x + 60, y1), f"SYSTEM LOAD: {sysload['cpu']}%", font=fonts['28'], fill=0)
+            draw.text((col1_x + 60, y1 + 35), f"RAM Free: {sysload['ram_free']} MB", font=fonts['20'], fill=0)
+            draw_sparkline(draw, col1_x + 60, y1 + 60, list(sysload['history']), max_items=30, width=350, height=40,
+                           style="bar")
+    
+        draw.line((col1_x, 150, col_w - 20, 150), fill=0, width=2)
+    
+        # Widget 2: Bambu or Crypto
+        y2 = 170
+        if ENABLE_BAMBU:
+            p_status = str(printer.get('status', 'OFFLINE')).upper()
+            draw_icon(draw, col1_x, y2, "icon_3d", (60, 60))
+            draw.text((col1_x + 70, y2), f"PRINTER: {p_status}", font=fonts['28'], fill=0)
+            if p_status not in ["OFFLINE", "UNKNOWN", "FINISH"]:
+                percent = printer.get('percentage', 0)
+                draw.rectangle((col1_x + 70, y2 + 40, col1_x + 400, y2 + 60), outline=0)
+                draw.rectangle((col1_x + 70, y2 + 40, col1_x + 70 + int(330 * (percent / 100)), y2 + 60), fill=0)
+                draw.text((col1_x + 70, y2 + 70),
+                          f"{percent}% | Rem: {printer.get('remaining_time', '0')}m | {printer.get('layers', '0/0')} L",
+                          font=fonts['20'], fill=0)
+        else:
+            draw_icon(draw, col1_x, y2, "icon_btc", (50, 50))
+            draw.text((col1_x + 60, y2), f"BTC: ${crypto['btc']}", font=fonts['28'], fill=0)
+            draw_sparkline(draw, col1_x + 60, y2 + 35, crypto['btc_hist'], max_items=50, width=350, height=35, style="bar")
+    
+            draw_icon(draw, col1_x, y2 + 80, "icon_eth", (50, 50))
+            draw.text((col1_x + 60, y2 + 80), f"ETH: ${crypto['eth']}", font=fonts['28'], fill=0)
+            draw_sparkline(draw, col1_x + 60, y2 + 115, crypto['eth_hist'], max_items=50, width=350, height=35, style="bar")
+    
+        draw.line((col1_x, 320, col_w - 20, 320), fill=0, width=2)
+    
+        # Widget 3: Roborock or Ping
+        y3 = 340
+        if ENABLE_ROBOROCK:
+            draw_icon(draw, col1_x, y3, "icon_roborock", (50, 50))
+            draw.text((col1_x + 60, y3), f"Bat: {rob['battery']}% | {rob['status']}", font=fonts['28'], fill=0)
+            if rob['is_cleaning']:
+                draw.text((col1_x + 60, y3 + 35), f"Clean: {rob['current_area']:.1f} m2 ({rob['pct']:.0f}%)",
+                          font=fonts['24'], fill=0)
+                clamped_pct = min(rob['pct'], 100)
+                draw.rectangle((col1_x + 60, y3 + 70, col1_x + 390, y3 + 90), outline=0)
+                draw.rectangle((col1_x + 60, y3 + 70, col1_x + 60 + int(330 * (clamped_pct / 100)), y3 + 90), fill=0)
+            else:
+                draw.text((col1_x + 60, y3 + 35), f"Last: {rob['last_date']} | {rob['ref_area']:.1f} m2", font=fonts['24'],
+                          fill=0)
+        elif ENABLE_ANTIGRAVITY:
+            draw_icon(draw, col1_x, y3, "icon_cpu", (50, 50))
+            draw.text((col1_x + 60, y3), "ANTIGRAVITY USAGE", font=fonts['28'], fill=0)
             
-            y_off = y3 + 35
-            for m_data in (opus, gemini):
-                if m_data:
-                    label = "Opus 4.6" if m_data.get('modelId') == 'claude-opus-4-6-thinking' else "Gemini 3Pro"
-                    pct = m_data.get('usedPercentage', 0)
-                    rem_time = time_until(m_data.get('resetDate'))
-                    
-                    draw.text((col1_x + 60, y_off), f"{label} {pct}% | In {rem_time}", font=fonts['20'], fill=0)
-                    
-                    bx, bw, bh = col1_x + 60, 330, 15
-                    draw.rectangle((bx, y_off + 25, bx + bw, y_off + 25 + bh), outline=0, width=2)
-                    fill_w = int((bw - 4) * min(pct / 100.0, 1.0))
-                    if fill_w > 0: draw.rectangle((bx + 2, y_off + 27, bx + 2 + fill_w, y_off + 25 + bh - 2), fill=0)
-                    
-                    y_off += 50
-    elif ENABLE_CODEX:
-        draw_icon(draw, col1_x, y3, "icon_cpu", (50, 50))
-        draw.text((col1_x + 60, y3), "CODEX AI USAGE", font=fonts['28'], fill=0)
-
-        if codex.get('error'):
-            draw.text((col1_x + 60, y3 + 40), "Codex Usage Error", font=fonts['20'], fill=0)
+            if antigravity.get('error'):
+                draw.text((col1_x + 60, y3 + 35), "Error loading data", font=fonts['20'], fill=0)
+            else:
+                models = antigravity.get('models', [])
+                opus = next((m for m in models if m.get('modelId') == 'claude-opus-4-6-thinking'), None)
+                gemini = next((m for m in models if m.get('modelId') == 'gemini-3-pro-high'), None)
+                
+                y_off = y3 + 35
+                for m_data in (opus, gemini):
+                    if m_data:
+                        label = "Opus 4.6" if m_data.get('modelId') == 'claude-opus-4-6-thinking' else "Gemini 3Pro"
+                        pct = m_data.get('usedPercentage', 0)
+                        rem_time = time_until(m_data.get('resetDate'))
+                        
+                        draw.text((col1_x + 60, y_off), f"{label} {pct}% | In {rem_time}", font=fonts['20'], fill=0)
+                        
+                        bx, bw, bh = col1_x + 60, 330, 15
+                        draw.rectangle((bx, y_off + 25, bx + bw, y_off + 25 + bh), outline=0, width=2)
+                        fill_w = int((bw - 4) * min(pct / 100.0, 1.0))
+                        if fill_w > 0: draw.rectangle((bx + 2, y_off + 27, bx + 2 + fill_w, y_off + 25 + bh - 2), fill=0)
+                        
+                        y_off += 50
+        elif ENABLE_CODEX:
+            draw_icon(draw, col1_x, y3, "icon_cpu", (50, 50))
+            draw.text((col1_x + 60, y3), "CODEX AI USAGE", font=fonts['28'], fill=0)
+    
+            if codex.get('error'):
+                draw.text((col1_x + 60, y3 + 40), "Codex Usage Error", font=fonts['20'], fill=0)
+            else:
+                # 7-Day limit only: OpenAI has disabled the 5-hour window for now.
+                pct_7d = codex.get('seven_day', {}).get('utilization', 0)
+                resets_7d = codex.get('seven_day', {}).get('resets_at')
+                rem_7d = time_until(resets_7d)
+    
+                draw.text((col1_x + 60, y3 + 40), f"7-Day Limit: {round(pct_7d)}% (In {rem_7d})",
+                          font=fonts['20'], fill=0)
+                bx, bw, bh = col1_x + 60, 330, 15
+                draw.rectangle((bx, y3 + 70, bx + bw, y3 + 70 + bh), outline=0, width=2)
+                fill_w = int((bw - 4) * min(pct_7d / 100.0, 1.0))
+                if fill_w > 0:
+                    draw.rectangle((bx + 2, y3 + 72, bx + 2 + fill_w, y3 + 70 + bh - 2), fill=0)
         else:
-            # 7-Day limit only: OpenAI has disabled the 5-hour window for now.
-            pct_7d = codex.get('seven_day', {}).get('utilization', 0)
-            resets_7d = codex.get('seven_day', {}).get('resets_at')
-            rem_7d = time_until(resets_7d)
-
-            draw.text((col1_x + 60, y3 + 40), f"7-Day Limit: {round(pct_7d)}% (In {rem_7d})",
-                      font=fonts['20'], fill=0)
-            bx, bw, bh = col1_x + 60, 330, 15
-            draw.rectangle((bx, y3 + 70, bx + bw, y3 + 70 + bh), outline=0, width=2)
-            fill_w = int((bw - 4) * min(pct_7d / 100.0, 1.0))
-            if fill_w > 0:
-                draw.rectangle((bx + 2, y3 + 72, bx + 2 + fill_w, y3 + 70 + bh - 2), fill=0)
-    else:
-        draw_icon(draw, col1_x, y3, "icon_wifi", (50, 50))
-        draw.text((col1_x + 60, y3), f"Internet Quality: {ping['current']} ms", font=fonts['28'], fill=0)
-        draw_sparkline(draw, col1_x, y3 + 60, list(ping['history']), max_items=50, width=400, height=40, style="bar")
+            draw_icon(draw, col1_x, y3, "icon_wifi", (50, 50))
+            draw.text((col1_x + 60, y3), f"Internet Quality: {ping['current']} ms", font=fonts['28'], fill=0)
+            draw_sparkline(draw, col1_x, y3 + 60, list(ping['history']), max_items=50, width=400, height=40, style="bar")
 
     draw.line((col_w, 10, col_w, 470), fill=0, width=2)
 
