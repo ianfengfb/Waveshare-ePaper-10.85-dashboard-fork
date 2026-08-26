@@ -1797,7 +1797,11 @@ def render_screen(epd, fonts):
         content_w = col_w - 20 - col1_x
 
         draw_icon(draw, col1_x, 15, "icon_task", (32, 32))
-        draw.text((col1_x + 45, 15), "TASKS OF THE DAY", font=fonts['28'], fill=0)
+        # y=20 (not 15) centres the title's glyph box on the 32px icon's
+        # centre — fonts['28']'s actual ink starts a few px below the y
+        # passed to draw.text(), so matching y values don't mean matching
+        # visual centres.
+        draw.text((col1_x + 45, 20), "TASKS OF THE DAY", font=fonts['28'], fill=0)
         draw.line((col1_x, 60, col1_x + content_w, 60), fill=0, width=2)
 
         if todos is None or not todos:
@@ -1808,7 +1812,7 @@ def render_screen(epd, fonts):
             # a stale or fake task list; [] means the fetch succeeded and
             # she genuinely has nothing on today's list.
             if todos is None:
-                icon_name, msg = "icon_wifi", "Can't Reach Tasks"
+                icon_name, msg = "icon_disconnected", "Connection Failed"
             else:
                 icon_name, msg = "icon_task", "No Tasks Today"
 

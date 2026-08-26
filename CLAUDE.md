@@ -203,11 +203,17 @@ off measuring a real "HH:MM AM/PM" string (~94px at `fonts['20']`), not a
 round number — an untested guess here undercounted it once already.
 
 **Two distinct placeholders, not one.** `render_screen()` checks
-`todos is None` before `not todos`: a centred `icon_wifi` plus "Can't Reach
-Tasks" for `None` (no successful fetch yet), or a centred `icon_task` plus
-"No Tasks Today" for `[]` (fetch succeeded, list is genuinely empty) — same
-"icon plus centred message" shape as Spotify's "Nothing Playing" and the
-weather placeholder, just two variants instead of one. This is a
+`todos is None` before `not todos`: a centred `icon_disconnected` plus
+"Connection Failed" for `None` (no successful fetch yet), or a centred
+`icon_task` plus "No Tasks Today" for `[]` (fetch succeeded, list is
+genuinely empty) — same "icon plus centred message" shape as Spotify's
+"Nothing Playing" and the weather placeholder, just two variants instead
+of one. `icon_disconnected.bmp` is a custom glyph (concentric white
+signal arcs cut into a black circle, struck through with a diagonal
+slash) rather than reusing `icon_wifi.bmp` — that one's a vendored icon
+used elsewhere for "internet quality" in a *connected* context, so
+reusing it here would read as "still connected" rather than "failed".
+This is a
 deliberate exception to this file's usual "keep the last known value on a
 failed fetch" convention (see Conventions below): `update_data_thread`'s
 todos fetch overwrites `data_store.todos` with `fetch_todos_data()`'s
