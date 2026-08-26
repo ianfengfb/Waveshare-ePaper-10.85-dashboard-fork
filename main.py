@@ -127,6 +127,7 @@ API_ENDPOINTS = {
     'outlook_token': 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     'outlook_messages': 'https://graph.microsoft.com/v1.0/me/messages',
     'affirmation': 'https://www.affirmations.dev',
+    'nasa_apod': 'https://api.nasa.gov/planetary/apod',
 }
 
 # --- CONFIGURATION ---
@@ -257,6 +258,14 @@ STRAVA_CONF = {
 # connect" placeholder for todos) rather than crashing.
 WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
+}
+
+# NASA's Astronomy Picture of the Day — free key from api.nasa.gov, entered
+# once by hand into a gitignored config file, same "never commit a secret"
+# pattern as every other credential in this file (just a single flat key
+# rather than base_url+key, since there's only one thing to configure).
+NASA_APOD_CONF = {
+    'CONFIG_FILE': os.path.join(BASE_DIR, 'nasa_apod_config.json')
 }
 
 # --- FILES & SCOPES ---
@@ -454,12 +463,16 @@ class DataStore:
             'progress_litres': 0.0, 'last_logged_at': None,
             'last_amount_litres': None, 'plants_grown_lifetime': 0
         }
+        # Greyscale PIL Image (NASA's Astronomy Picture of the Day) that
+        # fills the Tasks widget's leftover rows, or None — see
+        # fetch_nasa_apod_image(). None falls back to TODO_EMPTY_ROW_ICONS.
+        self.nasa_apod = None
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
-            'todos': 0, 'widget_config': 0, 'water': 0
+            'todos': 0, 'widget_config': 0, 'water': 0, 'nasa_apod': 0
         }
 
 
@@ -1291,6 +1304,53 @@ def fetch_water_status():
     }
 
 
+def _load_nasa_api_key():
+    """Reads {"api_key": ...} from NASA_APOD_CONF's gitignored CONFIG_FILE.
+    Missing file or missing key both return None, same "no config -> no-op"
+    convention as _load_waveshare_api_config()."""
+    if not os.path.exists(NASA_APOD_CONF['CONFIG_FILE']):
+        return None
+    try:
+        with open(NASA_APOD_CONF['CONFIG_FILE'], 'r') as f:
+            conf = json.load(f)
+        return conf.get('api_key') or None
+    except Exception:
+        return None
+
+
+def fetch_nasa_apod_image():
+    """GET /planetary/apod. Returns a greyscale PIL Image (not yet sized or
+    dithered — the Tasks widget resizes/dithers it fresh at render time,
+    since how much leftover space there is to fill depends on how many
+    real tasks exist that day) or None. None covers a missing config file,
+    a network/HTTP failure, and the days APOD publishes a video instead of
+    an image (media_type != "image") — there's nothing to display in any
+    of those cases. Unlike the Tasks fetch above, a failed attempt here
+    does NOT clear the last good image (see update_data_thread) — a
+    day-old space photo isn't misleading the way a stale task list is."""
+    api_key = _load_nasa_api_key()
+    if not api_key:
+        return None
+    url = f"{API_ENDPOINTS['nasa_apod']}?api_key={api_key}"
+    data = net.get_json(url, timeout=10)
+    if not isinstance(data, dict) or data.get('media_type') != 'image':
+        return None
+    img_url = data.get('url')
+    if not img_url:
+        return None
+    img_bytes = net.get_image(img_url)
+    if not img_bytes:
+        return None
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert('L')
+    except Exception:
+        return None
+    # Bounded so a huge original doesn't sit in memory between fetches —
+    # comfortably bigger than the Tasks widget's leftover area ever gets.
+    img.thumbnail((600, 600), Image.LANCZOS)
+    return img
+
+
 def update_data_thread():
     global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET
 
@@ -1561,6 +1621,19 @@ def update_data_thread():
                     MIDDLE_COLUMN_WIDGET = middle_widget
             data_store.last_update['widget_config'] = now
 
+        # NASA's photo changes at most once a day, so there's no need to
+        # poll anywhere near as often as the fetches above — hourly is
+        # already far more frequent than the content ever changes. Only
+        # updates data_store on success (see fetch_nasa_apod_image()) so a
+        # transient failure or a video-only day just keeps showing
+        # whatever the last successful fetch pulled down.
+        if ENABLE_TODO and now - data_store.last_update['nasa_apod'] > 3600:
+            apod_img = fetch_nasa_apod_image()
+            if apod_img is not None:
+                with data_store.lock:
+                    data_store.nasa_apod = apod_img
+            data_store.last_update['nasa_apod'] = now
+
         gc.collect()
         time.sleep(1)
 
@@ -1784,6 +1857,7 @@ def render_screen(epd, fonts):
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
         todos = data_store.todos.copy() if data_store.todos is not None else None
+        nasa_apod = data_store.nasa_apod
         water = data_store.water.copy()
     finally:
         data_store.lock.release()
@@ -1834,20 +1908,8 @@ def render_screen(epd, fonts):
             title_x = col1_x + checkbox_size + 8
             title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
 
-            for i in range(TODO_MAX_TASKS):
+            for i in range(min(len(todos), TODO_MAX_TASKS)):
                 row_y = row_top + i * row_h
-
-                if i >= len(todos):
-                    # Fewer tasks than row slots today — fill the leftover
-                    # rows with a cheerful face instead of a blank checkbox,
-                    # rather than a repeated empty outline with no task.
-                    face_size = min(36, row_h - 10)
-                    face_x = col1_x + (content_w - face_size) / 2
-                    face_y = row_y + (row_h - face_size) / 2 - 3
-                    draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
-                              (int(face_size), int(face_size)))
-                    continue
-
                 cb_y = row_y + 4
                 completed = todos[i].get('completed', False)
 
@@ -1885,6 +1947,34 @@ def render_screen(epd, fonts):
                 if i < TODO_MAX_TASKS - 1:
                     sep_y = row_y + row_h - 6
                     draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
+
+            if len(todos) < TODO_MAX_TASKS:
+                leftover_y0 = row_top + len(todos) * row_h
+                leftover_h = row_bottom - leftover_y0
+
+                if nasa_apod is not None:
+                    # One photo spanning the whole leftover block, not one
+                    # copy per empty row — NASA's photo of the day is often
+                    # a busy starfield/nebula shot, so it needs real room to
+                    # read as a picture rather than noise once dithered down
+                    # to 1-bit. Cover-fit (crop to fill, not letterbox) since
+                    # a fully-bled photo reads better here than a smaller
+                    # centred one on a blank margin.
+                    fitted = ImageOps.fit(nasa_apod, (int(content_w), int(leftover_h)), Image.LANCZOS)
+                    fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
+                    dithered = fitted.convert("1", dither=Image.NONE)
+                    Himage.paste(dithered, (col1_x, int(leftover_y0)))
+                else:
+                    # No photo yet (fresh boot, missing API key, or today's
+                    # APOD is a video) — fall back to a cheerful face per
+                    # remaining row rather than a blank checkbox grid.
+                    for i in range(len(todos), TODO_MAX_TASKS):
+                        row_y = row_top + i * row_h
+                        face_size = min(36, row_h - 10)
+                        face_x = col1_x + (content_w - face_size) / 2
+                        face_y = row_y + (row_h - face_size) / 2 - 3
+                        draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
+                                  (int(face_size), int(face_size)))
 
     else:
         # Widget 1: Strava or SysLoad

@@ -186,6 +186,20 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    the terminal. The script fetches and saves the tokens to `outlook_token.json`, and refreshes
    them automatically in the background from then on — no further logins needed.
 
+### NASA Astronomy Picture of the Day (Tasks widget filler)
+When the Tasks widget (`ENABLE_TODO`) has fewer than `TODO_MAX_TASKS` tasks for the day, the
+leftover space fills with NASA's photo of the day instead of a blank checkbox grid.
+1. Get a free API key from [api.nasa.gov](https://api.nasa.gov/) (no approval wait — it's issued
+   instantly).
+2. Create `nasa_apod_config.json` in the project root (gitignored, same as every other credential
+   file here):
+   ```json
+   { "api_key": "your-key-here" }
+   ```
+3. No further setup — `update_data_thread` starts polling it automatically once the file exists.
+   Without it (or on a day NASA publishes a video instead of a photo), the widget falls back to a
+   cheerful face per empty row.
+
 ---
 
 ## Running the Dashboard

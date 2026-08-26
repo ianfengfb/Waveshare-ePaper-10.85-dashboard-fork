@@ -224,14 +224,32 @@ crypto price isn't, so for this widget an honest "can't connect" beats
 silently showing yesterday's data.
 
 **Partially-empty rows**: when there are fewer real tasks than
-`TODO_MAX_TASKS` (the common case), the leftover rows show a cheerful face
-(`TODO_EMPTY_ROW_ICONS` — smile/happy/laugh, one picked at random per row
-via `random.choice()`) instead of a blank outlined checkbox, and skip the
-row separator line entirely so the faces read as open decorative space
-rather than more empty grid rows. Distinct from the all-empty placeholder
-above, which replaces the whole column with one centred icon+message —
-this is the "some tasks done, rest of the day is clear" case instead of
-"nothing at all today".
+`TODO_MAX_TASKS` (the common case), the leftover space is filled with
+NASA's Astronomy Picture of the Day (`fetch_nasa_apod_image()`) as one
+photo spanning the whole leftover block — not a copy per row — since
+APOD is often a busy starfield/nebula shot that needs real room to read
+as a picture once dithered down to 1-bit rather than noise. Cover-fit via
+`ImageOps.fit()` (crop to fill, not letterbox) and dithered the same way
+as Spotify's album art (`ImageEnhance.Contrast(...).enhance(3.0)` then
+`.convert("1", dither=Image.NONE)` — a hard threshold, not
+Floyd-Steinberg, for visual consistency with that widget). Falls back to
+`TODO_EMPTY_ROW_ICONS` (smile/happy/laugh faces, one picked at random per
+remaining row via `random.choice()`, no row separator so they read as
+open decorative space) when `data_store.nasa_apod` is `None` — fresh
+boot, no `nasa_apod_config.json`, a fetch failure, or a day APOD
+publishes a video instead of an image. Unlike the Tasks fetch itself, a
+failed APOD fetch does *not* clear the last good photo (see
+`update_data_thread`) — a day-old space photo isn't misleading the way a
+stale task list is, so it follows this file's usual "keep the last known
+value" convention instead of the Tasks-specific exception. `NASA_APOD_CONF`
+holds a gitignored `{"api_key": ...}` file, same never-commit-a-secret
+pattern as every other credential here, just a single flat key rather
+than base_url+key since there's only one thing to configure. Polled
+hourly (`ENABLE_TODO` gated) — APOD changes at most once a day, so
+anything faster would just be unnecessary load. Distinct from the
+all-empty placeholder above, which replaces the whole column with one
+centred icon+message — this is the "some tasks done, rest of the day is
+clear" case instead of "nothing at all today".
 
 ### Middle column: Spotify or Weather, switchable via MIDDLE_COLUMN_WIDGET
 
