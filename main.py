@@ -165,15 +165,20 @@ GREETING_FALLBACK_AFFIRMATIONS = [
 # --- TASKS WIDGET ---
 # How many task rows the widget always reserves space for, regardless of how
 # many real tasks come back — a short list just leaves empty rows rather
-# than resizing them, so the layout doesn't jump around. May change later
-# once the companion app's GET /api/top-todos is wired in; row height is
+# than resizing them, so the layout doesn't jump around. Row height is
 # computed from this rather than hardcoded, so changing it needs no other
 # edits.
 TODO_MAX_TASKS = 5
-# Placeholder content until GET /api/top-todos exists (see CLAUDE.md
-# roadmap) — a realistic mix of with/without a due time, and done/not-done,
-# since "due" is optional per task and completed tasks can still be among
-# today's top N (e.g. shown for the rest of the day as a done checkmark).
+# Rows beyond the real task count show one of these instead of a blank
+# checkbox row — a lighter, more celebratory "nothing here, enjoy it" than
+# an empty outline repeated a few times. Picked per row via random.choice()
+# so a short list doesn't always show the same face in the same slot.
+TODO_EMPTY_ROW_ICONS = ["icon_face_smile", "icon_face_happy", "icon_face_laugh"]
+# Seed content for local testing/preview — the real GET /api/tasks/top
+# fetch (see fetch_todos_data()) replaces this at runtime. A realistic mix
+# of with/without a due time, and done/not-done, since "due" is optional
+# per task and completed tasks can still be among today's top N (e.g. shown
+# for the rest of the day as a done checkmark).
 TODO_PLACEHOLDER_TASKS = [
     {"title": "Finish quarterly report", "due": "2:00 PM", "completed": False},
     {"title": "Buy groceries", "due": None, "completed": True},
@@ -1811,8 +1816,20 @@ def render_screen(epd, fonts):
 
             for i in range(TODO_MAX_TASKS):
                 row_y = row_top + i * row_h
+
+                if i >= len(todos):
+                    # Fewer tasks than row slots today — fill the leftover
+                    # rows with a cheerful face instead of a blank checkbox,
+                    # rather than a repeated empty outline with no task.
+                    face_size = min(36, row_h - 10)
+                    face_x = col1_x + (content_w - face_size) / 2
+                    face_y = row_y + (row_h - face_size) / 2 - 3
+                    draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
+                              (int(face_size), int(face_size)))
+                    continue
+
                 cb_y = row_y + 4
-                completed = i < len(todos) and todos[i].get('completed', False)
+                completed = todos[i].get('completed', False)
 
                 if completed:
                     # Filled box + a light checkmark cut into it, rather than an
@@ -1824,27 +1841,26 @@ def render_screen(epd, fonts):
                 else:
                     draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
 
-                if i < len(todos):
-                    task = todos[i]
-                    # Task titles will eventually be arbitrary text from the
-                    # companion app's API — same "unpredictable external text"
-                    # category as artist/track names and the affirmation line,
-                    # so truncate in pixels rather than assume they fit.
-                    title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
-                    title = title[0] if title else ''
-                    draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
-                    if completed and title:
-                        tw = text_width(draw, title, fonts['24'])
-                        bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
-                        strike_y = (bbox[1] + bbox[3]) / 2
-                        draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
+                task = todos[i]
+                # Task titles will eventually be arbitrary text from the
+                # companion app's API — same "unpredictable external text"
+                # category as artist/track names and the affirmation line,
+                # so truncate in pixels rather than assume they fit.
+                title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
+                title = title[0] if title else ''
+                draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
+                if completed and title:
+                    tw = text_width(draw, title, fonts['24'])
+                    bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
+                    strike_y = (bbox[1] + bbox[3]) / 2
+                    draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
 
-                    due = task.get('due')
-                    if due:
-                        due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
-                        due_text = due_line[0] if due_line else ''
-                        dw = text_width(draw, due_text, fonts['20'])
-                        draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
+                due = task.get('due')
+                if due:
+                    due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
+                    due_text = due_line[0] if due_line else ''
+                    dw = text_width(draw, due_text, fonts['20'])
+                    draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
 
                 if i < TODO_MAX_TASKS - 1:
                     sep_y = row_y + row_h - 6

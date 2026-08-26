@@ -176,8 +176,8 @@ the layout doesn't jump around as the count changes day to day. Row height
 is computed from `TODO_MAX_TASKS` rather than hardcoded, so changing the
 constant needs no other edits. `data_store.todos` is a list of
 `{"title": str, "due": str | None, "completed": bool}` dicts —
-`TODO_PLACEHOLDER_TASKS` seeds it until the roadmap's `GET /api/top-todos`
-fetch is wired in (see above); a completed task can still legitimately be
+`TODO_PLACEHOLDER_TASKS` seeds it for local testing/preview; `fetch_todos_data()`
+(see above) replaces it at runtime. A completed task can still legitimately be
 among today's top N (e.g. shown done for the rest of the day), so the
 placeholder data deliberately mixes completed and not.
 
@@ -205,6 +205,16 @@ Spotify's "Nothing Playing" and the weather placeholder. Doesn't
 distinguish "no tasks" from "fetch failed", same as those two — a
 missing/dead fetch degrades to the same placeholder rather than a special
 error state.
+
+**Partially-empty rows**: when there are fewer real tasks than
+`TODO_MAX_TASKS` (the common case), the leftover rows show a cheerful face
+(`TODO_EMPTY_ROW_ICONS` — smile/happy/laugh, one picked at random per row
+via `random.choice()`) instead of a blank outlined checkbox, and skip the
+row separator line entirely so the faces read as open decorative space
+rather than more empty grid rows. Distinct from the all-empty placeholder
+above, which replaces the whole column with one centred icon+message —
+this is the "some tasks done, rest of the day is clear" case instead of
+"nothing at all today".
 
 ### Middle column: Spotify or Weather, switchable via MIDDLE_COLUMN_WIDGET
 
