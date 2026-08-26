@@ -402,17 +402,17 @@ centres each (text, font) segment's own bounding box on a shared
 
 A separate project (its own repo, not this one) is being built to feed this
 dashboard custom data it has no public API for: a Cloudflare Pages app
-backed by a D1 database, reachable at a `*.pages.dev` dev subdomain (no
-custom domain). First use case is a personal todo list
-(`GET /api/top-todos` → the N highest-priority items) and remote widget
-configuration (which widgets/features should be visible, without editing
-`main.py` and redeploying to the Pi by hand). More endpoints will show up
-there as new widgets need custom data — this section describes the shape to
-follow, not an exhaustive endpoint list.
+backed by a D1 database, reachable at `https://waveshare-apis.pages.dev`
+(no custom domain). First use case is a personal todo list
+(`GET /api/tasks/top` → the N highest-priority items) and remote widget
+configuration (`GET /api/widget-config`, which widgets/features should be
+visible, without editing `main.py` and redeploying to the Pi by hand). More
+endpoints will show up there as new widgets need custom data — this section
+describes the shape to follow, not an exhaustive endpoint list.
 
 **One endpoint per resource, not one combined blob.** Each logical piece of
 data (todos, widget config, whatever's next) gets its own URL
-(`/api/top-todos`, `/api/widget-config`, ...), fetched independently by
+(`/api/tasks/top`, `/api/widget-config`, ...), fetched independently by
 `update_data_thread` on its own timer — the same pattern every other widget
 in this file already uses (weather, crypto, Spotify, ...): a fetch that can
 fail without affecting anything else, degrading to last-known-value or a
@@ -428,7 +428,48 @@ limit regardless of how many separate endpoints it hits.
 
 Auth: a shared secret sent as a header (e.g. `X-Api-Key`) on every request,
 checked once in the Cloudflare Pages Function — the endpoint is otherwise
-public since there's no real domain/WAF in front of it.
+public since there's no real domain/WAF in front of it. On the Pi side, the
+base URL and key live in `waveshare_api_config.json`
+(`WAVESHARE_API_CONF['CONFIG_FILE']`) — a small local file, gitignored like
+every other credential in this repo, holding
+`{"base_url": ..., "api_key": ...}`. It's read fresh on every fetch rather
+than cached at import (`_load_waveshare_api_config()`), so editing it takes
+effect on the next poll with no restart; a missing file (fresh checkout)
+makes both fetchers below no-ops, same degrade-to-safe-default convention
+as every other unwired widget.
+
+### Todo widget fetch (`fetch_todos_data()`)
+
+Polls `GET /api/tasks/top` every 120s (todos want to feel reasonably fresh,
+per the cadence reasoning above) and remaps its response onto
+`data_store.todos`. The companion app's actual field names —
+`{"text": ..., "dueTime": "HH:MM", "completed": ...}`, plus `id`/`position`/
+`isTop` the widget doesn't need — differ from the `{"title": ..., "due": ...,
+"completed": ...}` shape the draw code expects (see "Left column: Tasks"
+above), so this function maps `text` → `title` and reformats `dueTime`
+through `_format_due_time()`: the API sends 24h `"HH:MM"`, but the due-time
+column was sized for `"H:MM AM/PM"` (see the `due_col_w` note above), so
+`"18:08"` becomes `"6:08 PM"` rather than being passed through raw. A
+non-list response, an unreachable endpoint, or a missing config file all
+return `None`, which leaves `data_store.todos` at its last known value —
+same "don't blank a working widget on one bad fetch" rule as every other
+fetch in this file. `/api/widget-config`'s `top_n` isn't used to slice the
+result further here: the companion app already trims `/api/tasks/top` to
+that count server-side.
+
+### Remote widget config (`fetch_widget_config_data()`)
+
+Polls `GET /api/widget-config` every 600s (config changes rarely, "check
+every so often" per the cadence reasoning above) and, when the response is
+a dict, overrides the module-level `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`
+globals directly from inside `update_data_thread` (declared `global` there
+alongside `global_printer`). Only recognised values are applied —
+`email_provider` must be `"gmail"`/`"outlook"`/`null`, `middle_widget` must
+be `"spotify"`/`"weather"` — anything else (including a field the endpoint
+omits, like `top_n` today) leaves the current value alone rather than
+disabling the widget, per the roadmap's original "degrade like every other
+fetch" requirement. `ENABLE_TODO` and the other `ENABLE_*` toggles are
+untouched by this endpoint; they remain local edit-and-redeploy constants.
 
 ## Roadmap (not yet built — one session per item)
 
@@ -436,47 +477,25 @@ These are planned follow-ups; each is its own scoped session. Keep the
 render/drive split in mind when touching related code, but don't build these
 until asked:
 
-1. **Todo widget fetch** — the draw side is already built (`ENABLE_TODO`,
-   see below); still needs `update_data_thread` to actually call
-   `GET /api/top-todos` from the companion app above and populate
-   `data_store.todos`, replacing `TODO_PLACEHOLDER_TASKS`. Same shared-secret
-   header and fetch → parse → fallback pattern as every other widget — each
-   task dict should keep the `{"title": ..., "due": ..., "completed": ...}`
-   shape (`due` nullable) the draw code already expects.
-2. **Remote widget config via `/api/widget-config`** — right now
-   `EMAIL_PROVIDER`, `MIDDLE_COLUMN_WIDGET` (and every `ENABLE_*` flag) are
-   local edit-and-redeploy constants. Once the companion app exists, have
-   `update_data_thread` poll `/api/widget-config` on its own timer
-   (independent of `/api/top-todos`, per the one-endpoint-per-resource rule
-   above) and let its response override these at runtime. Proposed shape,
-   extensible as more remote toggles are needed — add fields, don't
-   restructure what's already there:
-   ```json
-   { "email_provider": "gmail", "middle_widget": "spotify" }
-   ```
-   `email_provider` mirrors `EMAIL_PROVIDER`'s exact values (`"gmail"` /
-   `"outlook"` / `null`). `middle_widget` mirrors `MIDDLE_COLUMN_WIDGET`'s
-   exact values (`"spotify"` / `"weather"`) — this is the field the
-   companion app's own Spotify/Weather switcher should drive. Missing/
-   unrecognised values should fall back to the local constant, not disable
-   the widget — a remote-config outage must degrade like every other fetch
-   in this file, not change behaviour.
-3. **iPhone steps (yesterday only)**: push, not pull — an iOS Shortcuts
+1. **Todo widget fetch** and **remote widget config via
+   `/api/widget-config`** are both now implemented — see "Todo widget
+   fetch" and "Remote widget config" under "Companion web app" above.
+2. **iPhone steps (yesterday only)**: push, not pull — an iOS Shortcuts
    automation POSTs the daily total to a small Flask receiver running on the
    Pi's LAN; the dashboard reads the stored value. (Strava is the fallback
    if this route isn't worth building.)
-4. **Spotify now-playing** is already implemented via Spotify's own Web API
+3. **Spotify now-playing** is already implemented via Spotify's own Web API
    (`SPOTIFY_CONF`, see above) and lives in the middle column (replacing
    Weather) — no work needed on the widget itself.
-5. **Gmail vs Outlook** is already implemented via `EMAIL_PROVIDER` (see
-   above) — no work needed on the widget itself, only on wiring item 2 in
-   once the companion app exists.
-6. **More middle-column widgets**: the Spotify widget doesn't fill the
+4. **Gmail vs Outlook** is already implemented via `EMAIL_PROVIDER` (see
+   above), and is now also remotely switchable via `/api/widget-config`
+   (see "Remote widget config" above) — no work needed on the widget itself.
+5. **More middle-column widgets**: the Spotify widget doesn't fill the
    whole column, and weather's slot is otherwise idle now. Candidates for
    filling the remaining space, not yet scoped: a compact weather summary,
    a second usage/status widget, or something else entirely — ask before
    picking one.
-7. **Hydration/growth widget fetch** — the draw side is already built
+6. **Hydration/growth widget fetch** — the draw side is already built
    (`ENABLE_WATER`, see above); still needs `update_data_thread` to call a
    new `GET /api/water-status` on the companion app and populate
    `data_store.water`, replacing its always-empty default. Same

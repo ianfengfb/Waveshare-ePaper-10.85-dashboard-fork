@@ -80,7 +80,7 @@ ENABLE_WATER = False
 # MIDDLE_COLUMN_WIDGET. Placeholder data only for now (TODO_PLACEHOLDER_TASKS
 # below) — real data will come from the companion app's GET /api/top-todos
 # once it exists, see CLAUDE.md roadmap.
-ENABLE_TODO = False
+ENABLE_TODO = True
 # Which email account the "Unread Today" widget reads from: "gmail",
 # "outlook", or None to disable it (shows 0, makes no API calls at all — the
 # widget itself is otherwise unconditional and always visible). A single
@@ -224,6 +224,17 @@ SPOTIFY_ART_SIZE = 190
 
 STRAVA_CONF = {
     'TOKEN_FILE': os.path.join(BASE_DIR, 'strava_token.json')
+}
+
+# Companion app (Cloudflare Pages + D1) — see CLAUDE.md's "Companion web
+# app" section. Unlike the OAuth widgets above, there's no token exchange:
+# CONFIG_FILE holds the static shared secret plus the app's base URL,
+# entered once by hand rather than obtained via a browser flow. Gitignored,
+# same as every other credential in this file — a fresh checkout has no
+# such file, which is what makes fetch_todos_data()/fetch_widget_config_data()
+# degrade to "leave data_store as-is" below rather than crashing.
+WAVESHARE_API_CONF = {
+    'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
 
 # --- FILES & SCOPES ---
@@ -421,7 +432,8 @@ class DataStore:
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
-            'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0
+            'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
+            'todos': 0, 'widget_config': 0
         }
 
 
@@ -1152,8 +1164,76 @@ def roborock_update_thread(user_data, email):
     loop.run_until_complete(_loop())
 
 
+def _load_waveshare_api_config():
+    """Reads {"base_url": ..., "api_key": ...} from WAVESHARE_API_CONF's
+    gitignored CONFIG_FILE. Read fresh on every call (cheap — one small local
+    file) rather than cached at import time, so editing the file takes effect
+    on the next fetch without a restart. Missing file or malformed/incomplete
+    contents both return None, which is what makes the two fetchers below
+    degrade to a no-op instead of crashing."""
+    if not os.path.exists(WAVESHARE_API_CONF['CONFIG_FILE']):
+        return None
+    try:
+        with open(WAVESHARE_API_CONF['CONFIG_FILE'], 'r') as f:
+            conf = json.load(f)
+        if conf.get('base_url') and conf.get('api_key'):
+            return conf
+    except Exception:
+        pass
+    return None
+
+
+def fetch_todos_data():
+    """GET /api/tasks/top. The companion app's field names (text/dueTime)
+    differ from data_store.todos' shape (title/due) that the Tasks widget's
+    draw code expects — see CLAUDE.md's "Todo widget fetch" section — so this
+    remaps rather than storing the response as-is. The API already returns
+    only the top N tasks (per /api/widget-config's top_n, server-side), so no
+    further slicing happens here."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/tasks/top"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, list):
+        return None
+    return [
+        {
+            'title': task.get('text', ''),
+            'due': _format_due_time(task.get('dueTime')),
+            'completed': bool(task.get('completed', False)),
+        }
+        for task in data if isinstance(task, dict)
+    ]
+
+
+def _format_due_time(due_time):
+    """The API sends dueTime as 24h "HH:MM"; the Tasks widget's due-time
+    column was sized for "H:MM AM/PM" (see CLAUDE.md), so reformat rather
+    than pass the raw string through. Falls back to the raw value on
+    anything that doesn't parse, rather than dropping it."""
+    if not due_time:
+        return None
+    try:
+        return datetime.strptime(due_time, '%H:%M').strftime('%I:%M %p').lstrip('0')
+    except ValueError:
+        return due_time
+
+
+def fetch_widget_config_data():
+    """GET /api/widget-config. Only email_provider/middle_widget are acted
+    on (see CLAUDE.md roadmap) — top_n is informational only, since the
+    companion app already trims /api/tasks/top to that count server-side."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/widget-config"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    return data if isinstance(data, dict) else None
+
+
 def update_data_thread():
-    global global_printer
+    global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET
 
     if ENABLE_BAMBU:
         try:
@@ -1385,6 +1465,28 @@ def update_data_thread():
                 with data_store.lock:
                     data_store.spotify = s_data
             data_store.last_update['spotify'] = now
+
+        # Companion app: todos want to feel reasonably fresh (120s), widget
+        # config is more "check every so often" (600s) — see CLAUDE.md's
+        # "one endpoint per resource" section for why these poll
+        # independently rather than sharing one combined fetch/cadence.
+        if now - data_store.last_update['todos'] > 120:
+            todos = fetch_todos_data()
+            if todos is not None:
+                with data_store.lock:
+                    data_store.todos = todos
+            data_store.last_update['todos'] = now
+
+        if now - data_store.last_update['widget_config'] > 600:
+            cfg = fetch_widget_config_data()
+            if cfg is not None:
+                email_provider = cfg.get('email_provider')
+                if email_provider in ('gmail', 'outlook', None):
+                    EMAIL_PROVIDER = email_provider
+                middle_widget = cfg.get('middle_widget')
+                if middle_widget in ('spotify', 'weather'):
+                    MIDDLE_COLUMN_WIDGET = middle_widget
+            data_store.last_update['widget_config'] = now
 
         gc.collect()
         time.sleep(1)
