@@ -95,12 +95,14 @@ ENABLE_TODO = True
 # one-time auth prompts (auth_gmail()/auth_outlook()) so a fresh checkout
 # never blocks on input(); update_data_thread's fetch already self-gates on
 # whichever provider's token file exists, same as before this flag existed.
-# Defaults to None (like every other ENABLE_* flag defaults False) so a
-# fresh checkout never prompts — set to "gmail" or "outlook" locally once
-# you've set up that provider's credentials. Intended to eventually be set
-# remotely via the companion app's /api/widget-config endpoint instead of
-# edited by hand — see CLAUDE.md.
-EMAIL_PROVIDER = None
+# Defaults to "gmail" — like ENABLE_TODO/ENABLE_SPOTIFY above, an exception
+# to the usual "off by default" rule now that Gmail OAuth is set up and
+# confirmed working for this deployment. Still safe on a fresh checkout
+# without token.json: auth_gmail() only prompts once, and pressing Enter
+# through it disables the widget (stays at 0 unread) rather than crashing.
+# Intended to eventually be set remotely via the companion app's
+# /api/widget-config endpoint instead of edited by hand — see CLAUDE.md.
+EMAIL_PROVIDER = "gmail"
 
 # --- API ENDPOINTS ---
 API_ENDPOINTS = {
@@ -438,7 +440,7 @@ class DataStore:
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
-            'todos': 0, 'widget_config': 0
+            'todos': 0, 'widget_config': 0, 'water': 0
         }
 
 
@@ -1237,6 +1239,39 @@ def fetch_widget_config_data():
     return data if isinstance(data, dict) else None
 
 
+def fetch_water_status():
+    """GET /api/water-status. progress_litres/last_amount_litres/
+    plants_grown_lifetime pass straight through — the companion app already
+    computes progress_litres as a running total since the last completed
+    plant (see CLAUDE.md), not a calendar window, so the Pi does no further
+    math on it. last_logged_at converts from the API's ISO 8601 UTC string
+    to a Unix timestamp, same `Z`-suffix handling as time_until() elsewhere
+    in this file, since that's what show_water's time.time() - ...
+    comparison expects."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/water-status"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, dict):
+        return None
+
+    last_logged_at = None
+    raw_ts = data.get('last_logged_at')
+    if raw_ts:
+        try:
+            last_logged_at = datetime.fromisoformat(raw_ts.replace('Z', '+00:00')).timestamp()
+        except (ValueError, AttributeError):
+            last_logged_at = None
+
+    return {
+        'progress_litres': data.get('progress_litres', 0.0),
+        'last_logged_at': last_logged_at,
+        'last_amount_litres': data.get('last_amount_litres'),
+        'plants_grown_lifetime': data.get('plants_grown_lifetime', 0),
+    }
+
+
 def update_data_thread():
     global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET
 
@@ -1470,6 +1505,17 @@ def update_data_thread():
                 with data_store.lock:
                     data_store.spotify = s_data
             data_store.last_update['spotify'] = now
+
+        # Polled every 20s (not the 120s/600s cadence above) because
+        # show_water's "was the last log within the last 60s" check needs
+        # to reliably catch a fresh log within that window — a slower poll
+        # risks missing the pop-up entirely on a given render cycle.
+        if ENABLE_WATER and now - data_store.last_update['water'] > 20:
+            w_data = fetch_water_status()
+            if w_data is not None:
+                with data_store.lock:
+                    data_store.water = w_data
+            data_store.last_update['water'] = now
 
         # Companion app: todos want to feel reasonably fresh (120s), widget
         # config is more "check every so often" (600s) — see CLAUDE.md's

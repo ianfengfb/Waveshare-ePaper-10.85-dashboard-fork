@@ -103,7 +103,9 @@ are not behind `ENABLE_*` flags at all: weather and the affirmation (from
 the keyless `affirmations.dev` API) render for real whenever there's
 network access, falling back to `GREETING_FALLBACK_AFFIRMATIONS` if that
 request fails; email unread quietly stays at `0` when `EMAIL_PROVIDER` is
-`None` or its token file is missing.
+`None` or its token file is missing. `EMAIL_PROVIDER` itself defaults to
+`"gmail"` rather than `None`, same "already confirmed working" reasoning
+as `ENABLE_TODO`/`ENABLE_SPOTIFY` — see "Email widget" below.
 
 The affirmation line is API-sourced text of unpredictable length, unlike
 every other string in this widget — `wrap_lines_limited()` in `main.py`
@@ -114,14 +116,18 @@ divider line or the email widget below it.
 
 ### Email widget: Gmail or Outlook, via EMAIL_PROVIDER
 
-`EMAIL_PROVIDER` (`"gmail"` | `"outlook"` | `None`, defaults `None`) is a
+`EMAIL_PROVIDER` (`"gmail"` | `"outlook"` | `None`, defaults `"gmail"`) is a
 mode selector, not a pair of `ENABLE_*` flags — exactly one provider (or
 none) can be active, and two independent booleans would allow an
 unrepresentable "both on" state. It gates `auth_gmail()`/`auth_outlook()`'s
-interactive one-time OAuth prompts (so a fresh checkout never blocks on
-`input()`) and which branch of `update_data_thread` fetches into the same
-`data_store.email_unread_today` field; the fetch itself still self-gates on
-its provider's token file, same as before this flag existed. Draw code
+interactive one-time OAuth prompts and which branch of `update_data_thread`
+fetches into the same `data_store.email_unread_today` field; the fetch
+itself still self-gates on its provider's token file, same as before this
+flag existed. Joins `ENABLE_TODO`/`ENABLE_SPOTIFY` as an exception to the
+usual "off by default" rule now that Gmail OAuth is set up and confirmed
+working for this deployment — still safe on a fresh checkout without
+`token.json`, since `auth_gmail()` only prompts once and pressing Enter
+through it leaves the widget at 0 rather than crashing. Draw code
 (`render_screen()`'s "3. Email" section) doesn't care which provider is
 active — same field, same icon, same "Unread Today: N" label.
 
@@ -478,6 +484,25 @@ disabling the widget, per the roadmap's original "degrade like every other
 fetch" requirement. `ENABLE_TODO` and the other `ENABLE_*` toggles are
 untouched by this endpoint; they remain local edit-and-redeploy constants.
 
+### Hydration widget fetch (`fetch_water_status()`)
+
+Polls `GET /api/water-status` every 20s — much more frequent than the
+todos/config endpoints above, because `show_water`'s "was the last log
+within the last 60s" check needs to reliably catch a fresh log within that
+window; a slower poll risks missing the pop-up on a given render cycle
+entirely. `progress_litres`/`last_amount_litres`/`plants_grown_lifetime`
+pass straight through into `data_store.water` — the companion app already
+computes `progress_litres` as a running total since the last completed
+plant (see `WATER_GROWTH_TARGET_LITRES` above), not a calendar window, so
+the Pi does no further math on it. `last_logged_at` comes back as an ISO
+8601 UTC string and gets converted to a Unix timestamp (`datetime.
+fromisoformat(...).timestamp()`, same `Z`-suffix handling `time_until()`
+uses elsewhere in this file) since that's what `show_water`'s
+`time.time() - ...` comparison expects. A non-dict response, an
+unreachable endpoint, or a missing config file all return `None`, which
+leaves `data_store.water` at its last known value — same "don't blank a
+working widget on one bad fetch" rule as every other fetch in this file.
+
 ## Roadmap (not yet built — one session per item)
 
 These are planned follow-ups; each is its own scoped session. Keep the
@@ -502,33 +527,8 @@ until asked:
    filling the remaining space, not yet scoped: a compact weather summary,
    a second usage/status widget, or something else entirely — ask before
    picking one.
-6. **Hydration/growth widget fetch** — the draw side is already built
-   (`ENABLE_WATER`, see above); still needs `update_data_thread` to call a
-   new `GET /api/water-status` on the companion app and populate
-   `data_store.water`, replacing its always-empty default. Same
-   shared-secret header and fetch → parse → fallback pattern as every other
-   widget. Proposed shape:
-   ```json
-   {
-     "progress_litres": 21.0, "last_logged_at": "2026-08-25T14:32:00Z",
-     "last_amount_litres": 0.5, "plants_grown_lifetime": 4
-   }
-   ```
-   `progress_litres` should already be the running total since the last
-   completed plant, computed and reset server-side — not raw log rows, and
-   not bound to any calendar window. Once it reaches
-   `WATER_GROWTH_TARGET_LITRES` (40L), the companion app should reset it to
-   0 and increment `plants_grown_lifetime`, however long that took; the Pi
-   does no date math and no reset logic, it only divides by
-   `WATER_GROWTH_TARGET_LITRES`. `last_logged_at` should be stamped
-   server-side when the log is inserted (not client-supplied), so device
-   clock drift on whatever she logs from can't fool the "was this within
-   the last minute" check. On the Pi side, convert it to a Unix timestamp
-   for `data_store.water['last_logged_at']` — that's what `show_water`'s
-   `time.time() - ...` comparison expects. `plants_grown_lifetime` is a
-   running count of completed plants across all time (not just the
-   current growth cycle) — also computed server-side; the Pi only displays
-   it via the widget's lifetime badge.
+6. **Hydration/growth widget fetch** is now implemented — see "Hydration
+   widget fetch" under "Companion web app" above.
 
 ## Conventions
 
