@@ -216,6 +216,20 @@ WATER_GROWTH_TARGET_LITRES = 40.0  # litres for a fully-grown plant
 # first appear (whichever redraw catches it), not instantaneously.
 WATER_SHOW_SECONDS = 60
 
+# A gentle reminder line at the bottom of the middle column when there's
+# been no water log for HYDRATION_ALERT_HOURS. Scoped to a working-hours
+# window rather than a rolling "N hours since last log" check that runs
+# all day: outside work hours she's off and home, where a screen nag
+# isn't useful, so the count resets to zero at HYDRATION_WINDOW_END_HOUR
+# and doesn't start ticking again until HYDRATION_WINDOW_START_HOUR the
+# next morning (see _hydration_alert_active()). Computed entirely
+# Pi-side off the last_logged_at timestamp /api/water-status already
+# returns — no new API data needed, same reasoning as show_water's
+# "last log within N seconds" check just above.
+HYDRATION_ALERT_HOURS = 4.0
+HYDRATION_WINDOW_START_HOUR = 9   # 9:00 AM
+HYDRATION_WINDOW_END_HOUR = 18    # 6:00 PM
+
 PRINTER_CONF = {
     'IP': '192.168....',
     'SERIAL': '....',
@@ -1345,6 +1359,27 @@ def fetch_water_status():
     }
 
 
+def _hydration_alert_active(last_logged_at):
+    """True when there's been no water log for HYDRATION_ALERT_HOURS within
+    today's HYDRATION_WINDOW_START_HOUR-HYDRATION_WINDOW_END_HOUR window.
+    Outside that window the count is treated as reset to zero (see the
+    HYDRATION_ALERT_HOURS comment above) — the count never carries over
+    from a previous day, since the baseline is clamped to today's window
+    start regardless of how old last_logged_at is. Uses the Pi's own
+    local clock (datetime.now()) rather than an explicit timezone, same
+    convention as the local-midnight calculation elsewhere in this file
+    — it trusts the Pi's system timezone to already be set correctly."""
+    now = datetime.now()
+    window_start = now.replace(hour=HYDRATION_WINDOW_START_HOUR, minute=0, second=0, microsecond=0)
+    window_end = now.replace(hour=HYDRATION_WINDOW_END_HOUR, minute=0, second=0, microsecond=0)
+    if now < window_start or now >= window_end:
+        return False
+    baseline = window_start.timestamp()
+    if last_logged_at is not None:
+        baseline = max(baseline, last_logged_at)
+    return (time.time() - baseline) >= HYDRATION_ALERT_HOURS * 3600
+
+
 def _load_news_api_key():
     """Reads {"api_key": ...} from NEWS_API_CONF's gitignored CONFIG_FILE.
     Missing file or missing key both return None, same "no config -> no-op"
@@ -2247,6 +2282,14 @@ def render_screen(epd, fonts):
         ENABLE_WATER and water_last_logged_at is not None
         and (time.time() - water_last_logged_at) < WATER_SHOW_SECONDS
     )
+    # Mutually exclusive with show_water in practice (that needs a log within
+    # the last minute; this needs one missing for hours), but excluded
+    # explicitly anyway so a fresh log's pop-up always wins the redraw it
+    # first appears on.
+    hydration_alert = (
+        ENABLE_WATER and not show_water
+        and _hydration_alert_active(water_last_logged_at)
+    )
 
     if show_water:
         # Hydration/growth widget — temporarily overlays whichever of
@@ -2399,14 +2442,25 @@ def render_screen(epd, fonts):
         except:
             start_idx = 0
 
+        # Normally this row runs edge-to-edge to the column's bottom pixel,
+        # leaving no room for the hydration notice below. Only when that
+        # notice is actually showing, shrink the row (smaller icons/font,
+        # tighter spacing) to free a strip at the bottom for it — the
+        # everyday (no-alert) layout is untouched.
+        forecast_font = fonts['20'] if hydration_alert else fonts['24']
+        forecast_icon_size = 44 if hydration_alert else 60
+        forecast_icon_y = 368 if hydration_alert else 375
+        forecast_temp_y = 416 if hydration_alert else 440
+
         for i in range(4):
             idx = start_idx + i
             if idx < len(times):
                 off_x = col2_x + (i * 105)
-                draw.text((off_x + 10, 340), f"{times[idx].split('T')[1][:5]}", font=fonts['24'], fill=0)
-                draw_icon(draw, off_x + 15, 375, get_weather_icon(codes[idx], 1), (60, 60))
+                draw.text((off_x + 10, 340), f"{times[idx].split('T')[1][:5]}", font=forecast_font, fill=0)
+                draw_icon(draw, off_x + 15, forecast_icon_y, get_weather_icon(codes[idx], 1),
+                          (forecast_icon_size, forecast_icon_size))
                 f_temp = math.floor(temps[idx] + 0.5)
-                draw.text((off_x + 15, 440), f"{f_temp}°C", font=fonts['24'], fill=0)
+                draw.text((off_x + 15, forecast_temp_y), f"{f_temp}°C", font=forecast_font, fill=0)
 
     elif MIDDLE_COLUMN_WIDGET == "weather":
         # Weather placeholder — the fetch failed or hasn't populated yet
@@ -2471,6 +2525,22 @@ def render_screen(epd, fonts):
             msg = "Nothing Playing"
             mw = text_width(draw, msg, fonts['28'])
             draw.text((col2_x + max(0, (content_w - mw) / 2), art_y + art_size + 40), msg, font=fonts['28'], fill=0)
+
+    if hydration_alert:
+        # A slim reminder line pinned to the very bottom of the column,
+        # on top of whichever of Spotify/Weather is showing above it —
+        # both already leave (or, for Weather's forecast row, now free up
+        # — see forecast_font/forecast_icon_size above) enough clearance
+        # here to not collide with it.
+        notice = "Haven't had water in a while!"
+        content_w = col_w - 40
+        icon_size = 20
+        gap = 8
+        nw = text_width(draw, notice, fonts['24'])
+        group_x = col2_x + max(0, (content_w - icon_size - gap - nw) / 2)
+        notice_y = 448
+        draw_icon(draw, int(group_x), notice_y, "icon_droplet", (icon_size, icon_size))
+        draw.text((group_x + icon_size + gap, notice_y - 4), notice, font=fonts['24'], fill=0)
 
     draw.line((col_w * 2, 10, col_w * 2, 470), fill=0, width=2)
 

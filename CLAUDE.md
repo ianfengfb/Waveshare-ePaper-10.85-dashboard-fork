@@ -461,6 +461,42 @@ cycle. A distinct icon from the header's droplet so it reads as its own
 companion app computes this count server-side, same as `progress_litres`
 itself — the Pi only displays it.
 
+**Hydration nag notice**: a one-line reminder ("Haven't had water in a
+while!" plus a small `icon_droplet`) pinned to the very bottom of the
+middle column whenever `hydration_alert` is true — on top of whichever of
+Spotify/Weather is currently showing there, same overlay approach as
+`show_water` above it. `_hydration_alert_active()` computes it entirely
+Pi-side from the same `last_logged_at` timestamp `/api/water-status`
+already returns (see "Hydration widget fetch" below) — no new API data
+needed. It's scoped to a working-hours window
+(`HYDRATION_WINDOW_START_HOUR`/`HYDRATION_WINDOW_END_HOUR`, 9am-6pm by
+default) rather than a rolling "N hours since last log" check that runs
+all day: outside those hours she's off work and home, where a screen nag
+isn't useful, so the count is treated as reset to zero at
+`HYDRATION_WINDOW_END_HOUR` and doesn't start ticking again until
+`HYDRATION_WINDOW_START_HOUR` the next morning — a stale log from days
+ago can never trigger it, since the baseline is always clamped to
+*today's* window start (`max(window_start, last_logged_at)`), never left
+at some ancient timestamp. It fires once at least `HYDRATION_ALERT_HOURS`
+(4.0) have elapsed since that baseline. Uses the Pi's own local clock
+(`datetime.now()`), same convention as the local-midnight calculation
+elsewhere in this file — it trusts the Pi's system timezone to already be
+set to Canberra time rather than hardcoding one. Mutually exclusive with
+`show_water` in practice (that needs a log within the last minute; this
+needs one missing for hours) but excluded explicitly anyway
+(`hydration_alert = ENABLE_WATER and not show_water and ...`), so a fresh
+log's pop-up always wins the redraw it first appears on.
+
+Weather's hourly-forecast row normally runs edge-to-edge to the column's
+bottom pixel (see the 4-hour forecast in the weather widget above) — no
+room left for a bottom-pinned notice. Rather than permanently shrinking
+that row (which would waste space on every ordinary day just for a rare
+alert), it only shrinks — smaller icons/font, tighter spacing — on the
+redraws where `hydration_alert` is actually true, freeing exactly enough
+of a strip at the bottom for the notice; the everyday layout is
+byte-for-byte unchanged. Spotify already has enough clearance below its
+artist/track text without any such adjustment.
+
 ### Adding a CJK (or other non-Latin) glyph to a widget
 
 `fnt/Aldrich-Regular.ttc` and `fnt/advanced_led_board-7.ttc` (the only two
