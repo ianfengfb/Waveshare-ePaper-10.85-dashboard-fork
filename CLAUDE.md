@@ -223,26 +223,33 @@ checkboxes — is actively misleading in a way a stale weather reading or
 crypto price isn't, so for this widget an honest "can't connect" beats
 silently showing yesterday's data.
 
-**Partially-empty rows**: when there are fewer real tasks than
-`TODO_MAX_TASKS` (the common case), the leftover space fills with
-whichever of two sources `TODO_FILLER_WIDGET` (`"news"` | `"nasa"`,
-default `"news"`) selects — a mode selector rather than two independent
-`ENABLE_*` flags, same reasoning as `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`:
-exactly one fills that space at a time. Local default for now, intended
-to eventually be set remotely via `/api/widget-config` the same way
-those two are — see roadmap. When the active source has nothing to show
-— fresh boot, missing config file, a fetch failure, or (NASA only) a day
-it publishes a video instead of a photo — it falls back to
-`TODO_EMPTY_ROW_ICONS`: a row of smile/happy/laugh faces (one picked at
-random per remaining slot via `random.choice()`), laid out side by side
-and centred in the leftover block rather than stacked one per row, sized
-to use the leftover block's full height (up to 64px) rather than pinned
-to a single row's ~77px band. `update_data_thread` only polls whichever
-source is currently active, never both.
+**The filler widget is a normal widget, not a leftover-space filler.**
+`displayed_count = min(len(todos), TODO_MAX_TASKS - 1)` always caps real
+task display one slot short of the full row count, so whichever of two
+sources `TODO_FILLER_WIDGET` (`"news"` | `"nasa"`, default `"news"`)
+selects always gets at least one row — even on a day with `TODO_MAX_TASKS`
+or more real tasks, which previously left it with zero space and made it
+vanish entirely. `TODO_FILLER_WIDGET` is a mode selector rather than two
+independent `ENABLE_*` flags, same reasoning as
+`EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: exactly one fills that space at a
+time. Local default for now, intended to eventually be set remotely via
+`/api/widget-config` the same way those two are — see roadmap. When the
+active source has nothing to show — fresh boot, missing config file, a
+fetch failure, or (NASA only) a day it publishes a video instead of a
+photo — it falls back to `TODO_EMPTY_ROW_ICONS`: a row of smile/happy/laugh
+faces (one picked at random per remaining slot via `random.choice()`),
+laid out side by side and centred in the filler block rather than stacked
+one per row, sized to use the filler block's full height (up to 64px)
+rather than pinned to a single row's ~77px band. The filler block's own
+height still grows to fill whatever space real tasks don't use — one row
+when there are `TODO_MAX_TASKS - 1` or more tasks, more than one when
+there are fewer — it's only the *minimum* that's now guaranteed, not a
+fixed size. `update_data_thread` only polls whichever source is currently
+active, never both.
 
 **`"news"`** shows one headline from NewsAPI.org's `/v2/top-headlines`
 (`fetch_news_headline()`) — a small "IN THE NEWS" label plus the
-headline, pixel-wrapped across however many lines the leftover block has
+headline, pixel-wrapped across however many lines the filler block has
 room for (same `wrap_lines_limited()` truncation every other
 externally-sourced string in this file uses). `NEWS_COUNTRY`/
 `NEWS_CATEGORY` (`"au"`/`"business"`) query general Australian business
@@ -266,7 +273,7 @@ project's use ever changed.
 
 **`"nasa"`** shows NASA's Astronomy Picture of the Day
 (`fetch_nasa_apod_image()`, `GET /planetary/apod`) as one photo spanning
-the whole leftover block — not a copy per row — since APOD is often a
+the whole filler block — not a copy per row — since APOD is often a
 busy starfield/nebula shot that needs real room to read as a picture
 once dithered to 1-bit rather than noise. Cover-fit via `ImageOps.fit()`
 (crop to fill, not letterbox) and dithered the same way as Spotify's

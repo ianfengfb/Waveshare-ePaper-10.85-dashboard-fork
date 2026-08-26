@@ -2014,7 +2014,14 @@ def render_screen(epd, fonts):
             title_x = col1_x + checkbox_size + 8
             title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
 
-            for i in range(min(len(todos), TODO_MAX_TASKS)):
+            # The filler widget (news/NASA/faces below) is a normal widget
+            # now, not just leftover space — it always gets at least one
+            # row, even when there'd otherwise be enough tasks to fill
+            # every slot. So real tasks display at most TODO_MAX_TASKS - 1
+            # of them, one slot short of the full row count.
+            displayed_count = min(len(todos), TODO_MAX_TASKS - 1)
+
+            for i in range(displayed_count):
                 row_y = row_top + i * row_h
                 cb_y = row_y + 4
                 completed = todos[i].get('completed', False)
@@ -2054,62 +2061,63 @@ def render_screen(epd, fonts):
                     sep_y = row_y + row_h - 6
                     draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
 
-            if len(todos) < TODO_MAX_TASKS:
-                leftover_y0 = row_top + len(todos) * row_h
-                leftover_h = row_bottom - leftover_y0
+            # A normal widget slot, not leftover space — always at least
+            # one row (see displayed_count above), regardless of how many
+            # real tasks there were to display.
+            filler_y0 = row_top + displayed_count * row_h
+            filler_h = row_bottom - filler_y0
 
-                if TODO_FILLER_WIDGET == "news" and news_headline:
-                    # One headline spanning the whole leftover block, not
-                    # one per row — "obviously only fits one" per the ask.
-                    # A small label first so a lone sentence doesn't look
-                    # like a stray fragment; the headline itself is
-                    # pixel-wrapped since it's unpredictable external text,
-                    # same reasoning as task titles/due times.
-                    label_y = leftover_y0 + 6
-                    draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
+            if TODO_FILLER_WIDGET == "news" and news_headline:
+                # One headline spanning the whole filler block, not one
+                # per row — "obviously only fits one" per the ask. A small
+                # label first so a lone sentence doesn't look like a stray
+                # fragment; the headline itself is pixel-wrapped since
+                # it's unpredictable external text, same reasoning as task
+                # titles/due times.
+                label_y = filler_y0 + 6
+                draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
 
-                    headline_font = fonts['24']
-                    line_h = 30
-                    max_lines = max(1, int((leftover_h - 30) / line_h))
-                    lines = wrap_lines_limited(draw, news_headline, headline_font, content_w, max_lines=max_lines)
-                    text_h = len(lines) * line_h
-                    text_y0 = label_y + 24 + max(0, (leftover_h - 30 - text_h) / 2)
-                    for li, line in enumerate(lines):
-                        lw = text_width(draw, line, headline_font)
-                        draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
-                                  line, font=headline_font, fill=0)
+                headline_font = fonts['24']
+                line_h = 30
+                max_lines = max(1, int((filler_h - 30) / line_h))
+                lines = wrap_lines_limited(draw, news_headline, headline_font, content_w, max_lines=max_lines)
+                text_h = len(lines) * line_h
+                text_y0 = label_y + 24 + max(0, (filler_h - 30 - text_h) / 2)
+                for li, line in enumerate(lines):
+                    lw = text_width(draw, line, headline_font)
+                    draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                              line, font=headline_font, fill=0)
 
-                elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
-                    # One photo spanning the whole leftover block, not one
-                    # copy per empty row — NASA's photo of the day is often
-                    # a busy starfield/nebula shot, so it needs real room to
-                    # read as a picture rather than noise once dithered down
-                    # to 1-bit. Cover-fit (crop to fill, not letterbox) since
-                    # a fully-bled photo reads better here than a smaller
-                    # centred one on a blank margin.
-                    fitted = ImageOps.fit(nasa_apod, (int(content_w), int(leftover_h)), Image.LANCZOS)
-                    fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
-                    dithered = fitted.convert("1", dither=Image.NONE)
-                    Himage.paste(dithered, (col1_x, int(leftover_y0)))
+            elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
+                # One photo spanning the whole filler block, not one copy
+                # per empty row — NASA's photo of the day is often a busy
+                # starfield/nebula shot, so it needs real room to read as
+                # a picture rather than noise once dithered down to 1-bit.
+                # Cover-fit (crop to fill, not letterbox) since a
+                # fully-bled photo reads better here than a smaller
+                # centred one on a blank margin.
+                fitted = ImageOps.fit(nasa_apod, (int(content_w), int(filler_h)), Image.LANCZOS)
+                fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
+                dithered = fitted.convert("1", dither=Image.NONE)
+                Himage.paste(dithered, (col1_x, int(filler_y0)))
 
-                else:
-                    # Nothing to show (fresh boot, missing API key, a
-                    # fetch failure, or — NASA only — today's APOD is a
-                    # video) — fall back to a row of cheerful faces, one
-                    # per remaining slot, laid out side by side and
-                    # centred in the leftover block rather than stacked
-                    # one per row — bigger and more legible than pinning
-                    # each to its own narrow row band.
-                    n_faces = TODO_MAX_TASKS - len(todos)
-                    face_size = min(64, int(leftover_h) - 20)
-                    spacing = 16
-                    total_w = n_faces * face_size + (n_faces - 1) * spacing
-                    start_x = col1_x + max(0, (content_w - total_w) / 2)
-                    face_y = leftover_y0 + (leftover_h - face_size) / 2
-                    for i in range(n_faces):
-                        face_x = start_x + i * (face_size + spacing)
-                        draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
-                                  (int(face_size), int(face_size)))
+            else:
+                # Nothing to show (fresh boot, missing API key, a fetch
+                # failure, or — NASA only — today's APOD is a video) —
+                # fall back to a row of cheerful faces, one per remaining
+                # slot, laid out side by side and centred in the filler
+                # block rather than stacked one per row — bigger and more
+                # legible than pinning each to its own narrow row band.
+                n_faces = TODO_MAX_TASKS - displayed_count
+                face_size = min(64, int(filler_h) - 20)
+                spacing = 16
+                total_w = n_faces * face_size + (n_faces - 1) * spacing
+                start_x = col1_x + max(0, (content_w - total_w) / 2)
+                face_y = filler_y0 + (filler_h - face_size) / 2
+                for i in range(n_faces):
+                    face_x = start_x + i * (face_size + spacing)
+                    draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
+                              (int(face_size), int(face_size)))
 
     else:
         # Widget 1: Strava or SysLoad

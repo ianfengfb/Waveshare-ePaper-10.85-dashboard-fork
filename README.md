@@ -187,10 +187,13 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    them automatically in the background from then on — no further logins needed.
 
 ### Tasks widget filler: NewsAPI or NASA (pick one)
-When the Tasks widget (`ENABLE_TODO`) has fewer than `TODO_MAX_TASKS` tasks for the day, the
-leftover space fills with either a news headline or NASA's photo of the day, whichever
-`TODO_FILLER_WIDGET` in `main.py` names (`"news"` or `"nasa"`, defaults to `"news"`) — instead of
-a blank checkbox grid. Only one is active at a time; you only need to set up the one you use.
+The Tasks widget (`ENABLE_TODO`) always reserves at least one row for a filler widget — either a
+news headline or NASA's photo of the day, whichever `TODO_FILLER_WIDGET` in `main.py` names
+(`"news"` or `"nasa"`, defaults to `"news"`) — instead of a blank checkbox grid, even on a day with
+`TODO_MAX_TASKS` or more real tasks. Real tasks display up to `TODO_MAX_TASKS - 1` of them, one
+slot short of the full row count; on a lighter day, the filler grows to use whatever space the
+remaining tasks don't. Only one filler source is active at a time; you only need to set up the one
+you use.
 
 #### NewsAPI (`TODO_FILLER_WIDGET = "news"`)
 Shows a single Australian business headline.
@@ -207,7 +210,7 @@ Shows a single Australian business headline.
    Without it (or on a fetch failure), the widget falls back to a cheerful face per empty row.
 
 #### NASA Astronomy Picture of the Day (`TODO_FILLER_WIDGET = "nasa"`)
-Shows NASA's photo of the day, cropped to fill the leftover space.
+Shows NASA's photo of the day, cropped to fill the filler widget's row(s).
 1. Get a free API key from [api.nasa.gov](https://api.nasa.gov/) (instant, no approval wait).
 2. Create `nasa_apod_config.json` in the project root (gitignored):
    ```json
