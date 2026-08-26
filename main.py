@@ -77,14 +77,19 @@ MIDDLE_COLUMN_WIDGET = "spotify"
 # right after a fresh water log arrives from the companion app, then
 # reverts to that widget on its own — see WATER_GROWTH_TARGET_LITRES below
 # and CLAUDE.md for how the timing and growth scale work. Takes priority
-# over both Spotify and Weather regardless of MIDDLE_COLUMN_WIDGET.
-ENABLE_WATER = False
+# over both Spotify and Weather regardless of MIDDLE_COLUMN_WIDGET. Defaults
+# to True — like ENABLE_TODO/ENABLE_SPOTIFY/EMAIL_PROVIDER above, an
+# exception to the usual "off by default" rule now that the companion app's
+# GET /api/water-status is live and confirmed working for this deployment.
+# Still safe on a fresh checkout without waveshare_api_config.json:
+# fetch_water_status() just no-ops, leaving data_store.water at its
+# always-hidden default.
+ENABLE_WATER = True
 # The left column shows the Tasks widget instead of System Load/Crypto/Ping
 # (and their Strava/Bambu/Roborock/Antigravity/Codex alternates) while this
 # is True — same "one column, one active widget" pattern as
-# MIDDLE_COLUMN_WIDGET. Placeholder data only for now (TODO_PLACEHOLDER_TASKS
-# below) — real data will come from the companion app's GET /api/top-todos
-# once it exists, see CLAUDE.md roadmap.
+# MIDDLE_COLUMN_WIDGET. Real data comes from the companion app's
+# GET /api/tasks/top (see fetch_todos_data() and CLAUDE.md).
 ENABLE_TODO = True
 # Which email account the "Unread Today" widget reads from: "gmail",
 # "outlook", or None to disable it (shows 0, makes no API calls at all — the
@@ -134,7 +139,7 @@ GREETING_NAME = "Charlotte"
 # '35' (Aldrich-Regular.ttc); non-Latin ones use 'cjk_greeting', a small
 # bundled subset font (fnt/CJK-Greeting.ttf) since Aldrich has no CJK/kana
 # glyphs. See CLAUDE.md for how to add more non-Latin words.
-GREETING_INTL_CHANCE = 0.25
+GREETING_INTL_CHANCE = 0.5
 GREETING_ZH_HELLO = "嗨"
 GREETING_ZH_CHANCE = 0.5  # share of the international slot given to Chinese
 GREETING_INTL_HELLOS = [
