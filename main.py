@@ -128,6 +128,7 @@ API_ENDPOINTS = {
     'outlook_messages': 'https://graph.microsoft.com/v1.0/me/messages',
     'affirmation': 'https://www.affirmations.dev',
     'news_top_headlines': 'https://newsapi.org/v2/top-headlines',
+    'nasa_apod': 'https://api.nasa.gov/planetary/apod',
 }
 
 # --- CONFIGURATION ---
@@ -260,14 +261,22 @@ WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
 
+# Which source fills the Tasks widget's leftover rows: "news" or "nasa".
+# A single mode selector rather than two independent ENABLE_* flags, same
+# reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly one occupies
+# that space at a time. Local default for now, intended to eventually be
+# set remotely via the companion app's /api/widget-config endpoint the
+# same way those two are — see CLAUDE.md roadmap.
+TODO_FILLER_WIDGET = "news"
+
 # NewsAPI.org — free key from newsapi.org, entered once by hand into a
 # gitignored config file, same "never commit a secret" pattern as every
-# other credential in this file (a single flat key, like NASA_APOD_CONF
-# would have been — just one thing to configure). NewsAPI's free
-# "Developer" plan is contractually development/testing-only (no
-# production or commercial use per their ToS) and delays articles by
-# 24h — acceptable for this personal, non-commercial dashboard, but
-# worth knowing if this ever became a public/commercial project.
+# other credential in this file (a single flat key, just one thing to
+# configure). NewsAPI's free "Developer" plan is contractually
+# development/testing-only (no production or commercial use per their
+# ToS) and delays articles by 24h — acceptable for this personal,
+# non-commercial dashboard, but worth knowing if this ever became a
+# public/commercial project.
 NEWS_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'news_api_config.json')
 }
@@ -284,6 +293,15 @@ NEWS_CATEGORY = 'business'
 # "actually relevant to a tax accountant" without narrowing the query
 # itself and risking an empty result on quiet news days.
 NEWS_PREFERRED_KEYWORDS = ['tax', 'ato', 'accountant', 'accounting', 'super', 'budget']
+
+# NASA's Astronomy Picture of the Day — free key from api.nasa.gov, same
+# gitignored-single-key pattern as NEWS_API_CONF above. Kept as an
+# alternative TODO_FILLER_WIDGET option (rather than removed in favour of
+# News) so either can be selected without redeploying code once remote
+# widget config is wired in.
+NASA_APOD_CONF = {
+    'CONFIG_FILE': os.path.join(BASE_DIR, 'nasa_apod_config.json')
+}
 
 # --- FILES & SCOPES ---
 GMAIL_TOKEN_PATH = os.path.join(BASE_DIR, 'token.json')
@@ -482,14 +500,20 @@ class DataStore:
         }
         # A single headline string that fills the Tasks widget's leftover
         # rows, or None — see fetch_news_headline(). None falls back to
-        # TODO_EMPTY_ROW_ICONS.
+        # TODO_EMPTY_ROW_ICONS. Only populated while TODO_FILLER_WIDGET ==
+        # "news".
         self.news_headline = None
+        # Greyscale PIL Image (NASA's Astronomy Picture of the Day), or
+        # None — see fetch_nasa_apod_image(). Only populated while
+        # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headline.
+        self.nasa_apod = None
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
-            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0
+            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0,
+            'nasa_apod': 0
         }
 
 
@@ -1372,8 +1396,55 @@ def fetch_news_headline():
     return titles[0]
 
 
+def _load_nasa_api_key():
+    """Reads {"api_key": ...} from NASA_APOD_CONF's gitignored CONFIG_FILE.
+    Missing file or missing key both return None, same "no config -> no-op"
+    convention as _load_waveshare_api_config()."""
+    if not os.path.exists(NASA_APOD_CONF['CONFIG_FILE']):
+        return None
+    try:
+        with open(NASA_APOD_CONF['CONFIG_FILE'], 'r') as f:
+            conf = json.load(f)
+        return conf.get('api_key') or None
+    except Exception:
+        return None
+
+
+def fetch_nasa_apod_image():
+    """GET /planetary/apod. Returns a greyscale PIL Image (not yet sized or
+    dithered — the Tasks widget resizes/dithers it fresh at render time,
+    since how much leftover space there is to fill depends on how many
+    real tasks exist that day) or None. None covers a missing config file,
+    a network/HTTP failure, and the days APOD publishes a video instead of
+    an image (media_type != "image") — there's nothing to display in any
+    of those cases. Unlike the Tasks fetch above, a failed attempt here
+    does NOT clear the last good image (see update_data_thread) — a
+    day-old space photo isn't misleading the way a stale task list is."""
+    api_key = _load_nasa_api_key()
+    if not api_key:
+        return None
+    url = f"{API_ENDPOINTS['nasa_apod']}?api_key={api_key}"
+    data = net.get_json(url, timeout=10)
+    if not isinstance(data, dict) or data.get('media_type') != 'image':
+        return None
+    img_url = data.get('url')
+    if not img_url:
+        return None
+    img_bytes = net.get_image(img_url)
+    if not img_bytes:
+        return None
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert('L')
+    except Exception:
+        return None
+    # Bounded so a huge original doesn't sit in memory between fetches —
+    # comfortably bigger than the Tasks widget's leftover area ever gets.
+    img.thumbnail((600, 600), Image.LANCZOS)
+    return img
+
+
 def update_data_thread():
-    global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET
+    global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET, TODO_FILLER_WIDGET
 
     if ENABLE_BAMBU:
         try:
@@ -1640,21 +1711,33 @@ def update_data_thread():
                 middle_widget = cfg.get('middle_widget')
                 if middle_widget in ('spotify', 'weather'):
                     MIDDLE_COLUMN_WIDGET = middle_widget
+                todo_filler = cfg.get('todo_filler')
+                if todo_filler in ('news', 'nasa'):
+                    TODO_FILLER_WIDGET = todo_filler
             data_store.last_update['widget_config'] = now
 
-        # Hourly is already far more often than needed — NewsAPI's free
-        # tier delays articles by 24h anyway, and the 100-req/day cap
-        # leaves a lot of headroom at this cadence. Only updates
-        # data_store on success, same "don't blank a working widget on
-        # one bad fetch" convention as most fetches in this file (unlike
-        # the Tasks fetch itself) — a slightly stale headline isn't
-        # misleading the way a stale task list is.
-        if ENABLE_TODO and now - data_store.last_update['news_headline'] > 3600:
+        # Only fetches whichever of news/NASA is the active
+        # TODO_FILLER_WIDGET — no point polling both when just one fills
+        # the Tasks widget's leftover space at a time. Hourly is already
+        # far more often than needed for either (NewsAPI's free tier
+        # delays articles by 24h anyway; NASA's photo changes once a day).
+        # Only updates data_store on success, same "don't blank a working
+        # widget on one bad fetch" convention as most fetches in this file
+        # (unlike the Tasks fetch itself) — a slightly stale headline/photo
+        # isn't misleading the way a stale task list is.
+        if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headline'] > 3600:
             headline = fetch_news_headline()
             if headline is not None:
                 with data_store.lock:
                     data_store.news_headline = headline
             data_store.last_update['news_headline'] = now
+
+        if ENABLE_TODO and TODO_FILLER_WIDGET == "nasa" and now - data_store.last_update['nasa_apod'] > 3600:
+            apod_img = fetch_nasa_apod_image()
+            if apod_img is not None:
+                with data_store.lock:
+                    data_store.nasa_apod = apod_img
+            data_store.last_update['nasa_apod'] = now
 
         gc.collect()
         time.sleep(1)
@@ -1880,6 +1963,7 @@ def render_screen(epd, fonts):
         affirmation = data_store.affirmation
         todos = data_store.todos.copy() if data_store.todos is not None else None
         news_headline = data_store.news_headline
+        nasa_apod = data_store.nasa_apod
         water = data_store.water.copy()
     finally:
         data_store.lock.release()
@@ -1974,7 +2058,7 @@ def render_screen(epd, fonts):
                 leftover_y0 = row_top + len(todos) * row_h
                 leftover_h = row_bottom - leftover_y0
 
-                if news_headline:
+                if TODO_FILLER_WIDGET == "news" and news_headline:
                     # One headline spanning the whole leftover block, not
                     # one per row — "obviously only fits one" per the ask.
                     # A small label first so a lone sentence doesn't look
@@ -1995,10 +2079,24 @@ def render_screen(epd, fonts):
                         draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
                                   line, font=headline_font, fill=0)
 
+                elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
+                    # One photo spanning the whole leftover block, not one
+                    # copy per empty row — NASA's photo of the day is often
+                    # a busy starfield/nebula shot, so it needs real room to
+                    # read as a picture rather than noise once dithered down
+                    # to 1-bit. Cover-fit (crop to fill, not letterbox) since
+                    # a fully-bled photo reads better here than a smaller
+                    # centred one on a blank margin.
+                    fitted = ImageOps.fit(nasa_apod, (int(content_w), int(leftover_h)), Image.LANCZOS)
+                    fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
+                    dithered = fitted.convert("1", dither=Image.NONE)
+                    Himage.paste(dithered, (col1_x, int(leftover_y0)))
+
                 else:
-                    # No headline yet (fresh boot, missing API key, or a
-                    # fetch failure) — fall back to a cheerful face per
-                    # remaining row rather than a blank checkbox grid.
+                    # Nothing to show yet (fresh boot, missing API key, a
+                    # fetch failure, or — NASA only — today's APOD is a
+                    # video) — fall back to a cheerful face per remaining
+                    # row rather than a blank checkbox grid.
                     for i in range(len(todos), TODO_MAX_TASKS):
                         row_y = row_top + i * row_h
                         face_size = min(36, row_h - 10)

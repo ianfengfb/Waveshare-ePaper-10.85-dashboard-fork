@@ -186,9 +186,14 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    the terminal. The script fetches and saves the tokens to `outlook_token.json`, and refreshes
    them automatically in the background from then on — no further logins needed.
 
-### NewsAPI (Tasks widget filler)
+### Tasks widget filler: NewsAPI or NASA (pick one)
 When the Tasks widget (`ENABLE_TODO`) has fewer than `TODO_MAX_TASKS` tasks for the day, the
-leftover space fills with a single Australian business headline instead of a blank checkbox grid.
+leftover space fills with either a news headline or NASA's photo of the day, whichever
+`TODO_FILLER_WIDGET` in `main.py` names (`"news"` or `"nasa"`, defaults to `"news"`) — instead of
+a blank checkbox grid. Only one is active at a time; you only need to set up the one you use.
+
+#### NewsAPI (`TODO_FILLER_WIDGET = "news"`)
+Shows a single Australian business headline.
 1. Get a free API key from [newsapi.org](https://newsapi.org/register) (instant, no approval wait).
    Note: NewsAPI's free "Developer" plan is contractually development/testing-only (not for
    production or commercial use) per their terms of service, and delays articles by 24 hours —
@@ -200,6 +205,17 @@ leftover space fills with a single Australian business headline instead of a bla
    ```
 3. No further setup — `update_data_thread` starts polling it automatically once the file exists.
    Without it (or on a fetch failure), the widget falls back to a cheerful face per empty row.
+
+#### NASA Astronomy Picture of the Day (`TODO_FILLER_WIDGET = "nasa"`)
+Shows NASA's photo of the day, cropped to fill the leftover space.
+1. Get a free API key from [api.nasa.gov](https://api.nasa.gov/) (instant, no approval wait).
+2. Create `nasa_apod_config.json` in the project root (gitignored):
+   ```json
+   { "api_key": "your-key-here" }
+   ```
+3. No further setup — same automatic polling as NewsAPI above. Without it, on a fetch failure, or
+   on a day NASA publishes a video instead of a photo, the widget falls back to a cheerful face
+   per empty row.
 
 ---
 

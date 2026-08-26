@@ -224,40 +224,62 @@ crypto price isn't, so for this widget an honest "can't connect" beats
 silently showing yesterday's data.
 
 **Partially-empty rows**: when there are fewer real tasks than
-`TODO_MAX_TASKS` (the common case), the leftover space fills with one
-headline from NewsAPI.org's `/v2/top-headlines` (`fetch_news_headline()`)
-— a small "IN THE NEWS" label plus the headline, pixel-wrapped across
-however many lines the leftover block has room for (same
-`wrap_lines_limited()` truncation every other externally-sourced string
-in this file uses). Falls back to `TODO_EMPTY_ROW_ICONS` (smile/happy/laugh
-faces, one picked at random per remaining row via `random.choice()`, no
-row separator so they read as open decorative space) when
-`data_store.news_headline` is `None` — fresh boot, no
-`news_api_config.json`, or a fetch failure.
+`TODO_MAX_TASKS` (the common case), the leftover space fills with
+whichever of two sources `TODO_FILLER_WIDGET` (`"news"` | `"nasa"`,
+default `"news"`) selects — a mode selector rather than two independent
+`ENABLE_*` flags, same reasoning as `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`:
+exactly one fills that space at a time. Local default for now, intended
+to eventually be set remotely via `/api/widget-config` the same way
+those two are — see roadmap. Both fall back to `TODO_EMPTY_ROW_ICONS`
+(smile/happy/laugh faces, one picked at random per remaining row via
+`random.choice()`, no row separator so they read as open decorative
+space) when the active source has nothing to show — fresh boot, missing
+config file, a fetch failure, or (NASA only) a day it publishes a video
+instead of a photo. `update_data_thread` only polls whichever source is
+currently active, never both.
 
-`NEWS_COUNTRY`/`NEWS_CATEGORY` (`"au"`/`"business"`) query general
-Australian business news rather than a tax-specific keyword search —
-NewsAPI has no city-level targeting (nothing closer to "Canberra" than
-the country code), and a keyword-only query like `q=tax OR ATO` would
-come up empty on plenty of days, which a country+category feed never
-does. `NEWS_PREFERRED_KEYWORDS` then re-ranks *within* that always-populated
+**`"news"`** shows one headline from NewsAPI.org's `/v2/top-headlines`
+(`fetch_news_headline()`) — a small "IN THE NEWS" label plus the
+headline, pixel-wrapped across however many lines the leftover block has
+room for (same `wrap_lines_limited()` truncation every other
+externally-sourced string in this file uses). `NEWS_COUNTRY`/
+`NEWS_CATEGORY` (`"au"`/`"business"`) query general Australian business
+news rather than a tax-specific keyword search — NewsAPI has no
+city-level targeting (nothing closer to "Canberra" than the country
+code), and a keyword-only query like `q=tax OR ATO` would come up empty
+on plenty of days, which a country+category feed never does.
+`NEWS_PREFERRED_KEYWORDS` then re-ranks *within* that always-populated
 batch: `fetch_news_headline()` returns the first fetched headline
-containing one of those keywords, falling back to the plain top story
-if none match, so the query itself never narrows and risks emptiness —
-only the choice among an already-non-empty result does.
+containing one of those keywords, falling back to the plain top story if
+none match, so the query itself never narrows and risks emptiness — only
+the choice among an already-non-empty result does. Polled hourly
+(`ENABLE_TODO`-gated) — NewsAPI's free "Developer" plan delays articles
+by 24h anyway and caps at 100 requests/day, so anything faster buys
+nothing. `NEWS_API_CONF` holds a gitignored `{"api_key": ...}` file, same
+never-commit-a-secret pattern as every other credential here. **Note on
+that free plan**: NewsAPI's ToS restricts it to development/testing, not
+production or commercial use — a judgement call to run it on a personal,
+non-commercial dashboard like this one, but worth knowing if this
+project's use ever changed.
 
-Unlike the Tasks fetch itself, a failed headline fetch does *not* clear
-the last good headline (see `update_data_thread`) — a slightly stale
-headline isn't misleading the way a stale task list is, so this follows
-the file's usual "keep the last known value" convention instead of the
-Tasks-specific exception. Polled hourly (`ENABLE_TODO`-gated) — NewsAPI's
-free "Developer" plan delays articles by 24h anyway and caps at 100
-requests/day, so anything faster buys nothing. `NEWS_API_CONF` holds a
-gitignored `{"api_key": ...}` file, same never-commit-a-secret pattern as
-every other credential here. **Note on that free plan**: NewsAPI's ToS
-restricts it to development/testing, not production or commercial use —
-a judgement call to run it on a personal, non-commercial dashboard like
-this one, but worth knowing if this project's use ever changed.
+**`"nasa"`** shows NASA's Astronomy Picture of the Day
+(`fetch_nasa_apod_image()`, `GET /planetary/apod`) as one photo spanning
+the whole leftover block — not a copy per row — since APOD is often a
+busy starfield/nebula shot that needs real room to read as a picture
+once dithered to 1-bit rather than noise. Cover-fit via `ImageOps.fit()`
+(crop to fill, not letterbox) and dithered the same way as Spotify's
+album art (`ImageEnhance.Contrast(...).enhance(3.0)` then
+`.convert("1", dither=Image.NONE)` — a hard threshold, not
+Floyd-Steinberg, for visual consistency with that widget). `NASA_APOD_CONF`
+holds a gitignored `{"api_key": ...}` file, same pattern as `NEWS_API_CONF`.
+Polled hourly — APOD changes at most once a day, so anything faster is
+unnecessary load.
+
+Unlike the Tasks fetch itself, a failed fetch on either source does
+*not* clear the last good result (see `update_data_thread`) — a
+slightly stale headline or a day-old space photo isn't misleading the
+way a stale task list is, so both follow the file's usual "keep the
+last known value" convention instead of the Tasks-specific exception.
 
 Distinct from the all-empty placeholder above, which replaces the whole
 column with one centred icon+message — this is the "some tasks done,
@@ -533,15 +555,16 @@ that count server-side.
 
 Polls `GET /api/widget-config` every 600s (config changes rarely, "check
 every so often" per the cadence reasoning above) and, when the response is
-a dict, overrides the module-level `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`
-globals directly from inside `update_data_thread` (declared `global` there
-alongside `global_printer`). Only recognised values are applied —
-`email_provider` must be `"gmail"`/`"outlook"`/`null`, `middle_widget` must
-be `"spotify"`/`"weather"` — anything else (including a field the endpoint
-omits, like `top_n` today) leaves the current value alone rather than
-disabling the widget, per the roadmap's original "degrade like every other
-fetch" requirement. `ENABLE_TODO` and the other `ENABLE_*` toggles are
-untouched by this endpoint; they remain local edit-and-redeploy constants.
+a dict, overrides the module-level `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`/
+`TODO_FILLER_WIDGET` globals directly from inside `update_data_thread`
+(declared `global` there alongside `global_printer`). Only recognised
+values are applied — `email_provider` must be `"gmail"`/`"outlook"`/`null`,
+`middle_widget` must be `"spotify"`/`"weather"`, `todo_filler` must be
+`"news"`/`"nasa"` — anything else (including a field the endpoint omits,
+like `top_n` today) leaves the current value alone rather than disabling
+the widget, per the roadmap's original "degrade like every other fetch"
+requirement. `ENABLE_TODO` and the other `ENABLE_*` toggles are untouched
+by this endpoint; they remain local edit-and-redeploy constants.
 
 ### Hydration widget fetch (`fetch_water_status()`)
 
