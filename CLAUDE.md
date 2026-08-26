@@ -89,14 +89,21 @@ Windows; the rlimit tweak it does is a no-op there.
 Every `ENABLE_*` widget toggle in `main.py` defaults to `False`, so a fresh
 checkout with no credentials configured already renders the fallback widgets
 (System Load, Crypto, Internet Ping, Greeting) instead of the token-gated
-ones (Strava, Bambu, Roborock, Claude/Codex/Antigravity usage, Spotify) —
-this is the project's built-in graceful-degradation design, not something
-the preview pipeline needs to special-case. Weather, the email-unread count,
-and the greeting widget's affirmation line are not behind `ENABLE_*` flags:
-weather and the affirmation (from the keyless `affirmations.dev` API) render
-for real whenever there's network access, falling back to
-`GREETING_FALLBACK_AFFIRMATIONS` if that request fails; email unread quietly
-stays at `0` when `EMAIL_PROVIDER` is `None` or its token file is missing.
+ones (Strava, Bambu, Roborock, Claude/Codex/Antigravity usage) — this is the
+project's built-in graceful-degradation design, not something the preview
+pipeline needs to special-case. `ENABLE_TODO` and `ENABLE_SPOTIFY` are the
+two exceptions, defaulting to `True` now that both are fully set up and
+confirmed working for this deployment — a fresh checkout with no
+`waveshare_api_config.json`/`spotify_token.json` still degrades safely
+(`fetch_todos_data()` no-ops without its config file; `auth_spotify()` only
+prompts once, and pressing Enter through it falls back to "Nothing
+Playing"), it just isn't the *quiet* off-by-default most other toggles are.
+Weather, the email-unread count, and the greeting widget's affirmation line
+are not behind `ENABLE_*` flags at all: weather and the affirmation (from
+the keyless `affirmations.dev` API) render for real whenever there's
+network access, falling back to `GREETING_FALLBACK_AFFIRMATIONS` if that
+request fails; email unread quietly stays at `0` when `EMAIL_PROVIDER` is
+`None` or its token file is missing.
 
 The affirmation line is API-sourced text of unpredictable length, unlike
 every other string in this widget — `wrap_lines_limited()` in `main.py`

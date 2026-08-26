@@ -59,7 +59,12 @@ ENABLE_ROBOROCK = False
 ENABLE_ANTIGRAVITY = False
 ENABLE_CODEX = False
 ENABLE_CLAUDE = False
-ENABLE_SPOTIFY = False
+# Defaults on (unlike the other credentialed toggles above) since Spotify
+# OAuth is already set up and confirmed working for this deployment —
+# auth_spotify() only ever prompts when spotify_token.json is missing, so
+# this stays safe for a fresh checkout too (it just falls back to "Nothing
+# Playing" once someone presses Enter through the one-time setup prompt).
+ENABLE_SPOTIFY = True
 # Which widget the middle column shows: "spotify" or "weather". A single
 # mode selector rather than an ENABLE_WEATHER boolean, same reasoning as
 # EMAIL_PROVIDER below — exactly one of the two can occupy this slot at a
