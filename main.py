@@ -289,13 +289,21 @@ WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
 
-# Which source fills the Tasks widget's leftover rows: "news" or "nasa".
-# A single mode selector rather than two independent ENABLE_* flags, same
-# reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly one occupies
-# that space at a time. Local default for now, intended to eventually be
-# set remotely via the companion app's /api/widget-config endpoint the
-# same way those two are — see CLAUDE.md roadmap.
+# Which source fills the Tasks widget's filler row(s): "news", "nasa", or
+# "calendar". A single mode selector rather than independent ENABLE_*
+# flags, same reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly
+# one occupies that space at a time. Local default for now, intended to
+# eventually be set remotely via the companion app's /api/widget-config
+# endpoint the same way those two are — see CLAUDE.md roadmap.
 TODO_FILLER_WIDGET = "news"
+
+# How many seconds each of the "calendar" filler's up-to-3 events stays on
+# screen before rotating to the next one. Matched to main()'s own ~60s
+# render cadence — a shorter value here would just mean some redraws land
+# in the same rotation bucket as the last one (no visible change) rather
+# than smoothly speeding up the rotation, since the display can only ever
+# change on an actual redraw.
+CALENDAR_ROTATE_SECONDS = 60
 
 # NewsAPI.org — free key from newsapi.org, entered once by hand into a
 # gitignored config file, same "never commit a secret" pattern as every
@@ -535,6 +543,13 @@ class DataStore:
         # None — see fetch_nasa_apod_image(). Only populated while
         # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headline.
         self.nasa_apod = None
+        # Up to 3 {"title": str, "start_time": ISO8601 str} dicts, soonest
+        # first, or None — see fetch_calendar_events(). Populated by an
+        # iPhone Shortcuts automation pushing her calendar to the
+        # companion app; the Pi only ever reads the latest snapshot. None
+        # falls back to TODO_EMPTY_ROW_ICONS, same as news_headline/
+        # nasa_apod. Only populated while TODO_FILLER_WIDGET == "calendar".
+        self.calendar_events = None
         # A remote full-screen takeover: while enabled is True, render_screen()
         # replaces every widget with just `message`, auto-sized to fill the
         # screen — see fetch_away_message() and draw_away_message(). Defaults
@@ -547,7 +562,8 @@ class DataStore:
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
             'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0,
-            'nasa_apod': 0, 'away_message': 0, 'system_status': 0
+            'nasa_apod': 0, 'away_message': 0, 'system_status': 0,
+            'calendar_events': 0
         }
 
 
@@ -1626,6 +1642,58 @@ def fetch_nasa_apod_image():
     return img
 
 
+def fetch_calendar_events():
+    """GET /api/calendar-events. Populated by an iPhone Shortcuts
+    automation that periodically pushes her upcoming calendar events to
+    the companion app — the Pi only ever reads whatever snapshot is
+    currently stored there, same shared-secret auth as every other
+    companion-app call. The companion app already trims to the 3 soonest
+    events server-side, same "server does the slicing" precedent as
+    /api/tasks/top; events[:3] here is just a defensive cap in case it
+    ever sends more. A non-list response, an unreachable endpoint, or a
+    missing config file all return None, which leaves
+    data_store.calendar_events at its last known value — a slightly
+    stale event list isn't misleading the way a stale Tasks checklist is
+    (see fetch_todos_data()), so this follows the file's usual "keep the
+    last known value" convention rather than that exception."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/calendar-events"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, list):
+        return None
+    events = [
+        {'title': str(item['title']), 'start_time': str(item['start_time'])}
+        for item in data
+        if isinstance(item, dict) and item.get('title') and item.get('start_time')
+    ]
+    return events[:3]
+
+
+def _format_calendar_time(iso_str):
+    """Formats an event's ISO 8601 start time (with UTC offset, from the
+    companion app) relative to today: "Today 3:00 PM", "Tomorrow 9:00 AM",
+    or "Fri 10:00 AM" for anything further out — with at most 3 events
+    ever shown, they're never more than about a week away, so a weekday
+    name plus time is unambiguous without needing the full date too.
+    Compares against the Pi's own local clock/timezone (`.astimezone()`
+    with no explicit zone), same convention as the local-midnight
+    calculation elsewhere in this file — it trusts the Pi's system
+    timezone to already be set correctly."""
+    try:
+        dt = datetime.fromisoformat(iso_str).astimezone()
+    except (ValueError, TypeError):
+        return ""
+    today = datetime.now().astimezone().date()
+    time_str = dt.strftime("%I:%M %p").lstrip("0")
+    if dt.date() == today:
+        return f"Today {time_str}"
+    elif dt.date() == today + timedelta(days=1):
+        return f"Tomorrow {time_str}"
+    return f"{dt.strftime('%a')} {time_str}"
+
+
 def update_data_thread():
     global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET, TODO_FILLER_WIDGET
 
@@ -1914,19 +1982,20 @@ def update_data_thread():
                 if middle_widget in ('spotify', 'weather'):
                     MIDDLE_COLUMN_WIDGET = middle_widget
                 todo_filler = cfg.get('todo_filler')
-                if todo_filler in ('news', 'nasa'):
+                if todo_filler in ('news', 'nasa', 'calendar'):
                     TODO_FILLER_WIDGET = todo_filler
             data_store.last_update['widget_config'] = now
 
-        # Only fetches whichever of news/NASA is the active
-        # TODO_FILLER_WIDGET — no point polling both when just one fills
-        # the Tasks widget's leftover space at a time. Hourly is already
-        # far more often than needed for either (NewsAPI's free tier
-        # delays articles by 24h anyway; NASA's photo changes once a day).
-        # Only updates data_store on success, same "don't blank a working
-        # widget on one bad fetch" convention as most fetches in this file
-        # (unlike the Tasks fetch itself) — a slightly stale headline/photo
-        # isn't misleading the way a stale task list is.
+        # Only fetches whichever of news/NASA/calendar is the active
+        # TODO_FILLER_WIDGET — no point polling all three when just one
+        # fills the Tasks widget's filler space at a time. Hourly is
+        # already far more often than needed for news/NASA (NewsAPI's
+        # free tier delays articles by 24h anyway; NASA's photo changes
+        # once a day). Only updates data_store on success, same "don't
+        # blank a working widget on one bad fetch" convention as most
+        # fetches in this file (unlike the Tasks fetch itself) — a
+        # slightly stale headline/photo/event list isn't misleading the
+        # way a stale task list is.
         if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headline'] > 3600:
             headline = fetch_news_headline()
             if headline is not None:
@@ -1940,6 +2009,17 @@ def update_data_thread():
                 with data_store.lock:
                     data_store.nasa_apod = apod_img
             data_store.last_update['nasa_apod'] = now
+
+        # Polled every 300s, faster than news/NASA's hourly cadence —
+        # unlike those two, "is this event starting soon" is time-
+        # sensitive, even though the underlying data on the companion app
+        # only changes whenever her iPhone Shortcut last ran.
+        if ENABLE_TODO and TODO_FILLER_WIDGET == "calendar" and now - data_store.last_update['calendar_events'] > 300:
+            events = fetch_calendar_events()
+            if events is not None:
+                with data_store.lock:
+                    data_store.calendar_events = events
+            data_store.last_update['calendar_events'] = now
 
         gc.collect()
         time.sleep(1)
@@ -2222,6 +2302,7 @@ def render_screen(epd, fonts):
         todos = data_store.todos.copy() if data_store.todos is not None else None
         news_headline = data_store.news_headline
         nasa_apod = data_store.nasa_apod
+        calendar_events = data_store.calendar_events.copy() if data_store.calendar_events is not None else None
         water = data_store.water.copy()
         away_message = data_store.away_message.copy()
     finally:
@@ -2366,13 +2447,59 @@ def render_screen(epd, fonts):
                 dithered = fitted.convert("1", dither=Image.NONE)
                 Himage.paste(dithered, (col1_x, int(filler_y0)))
 
+            elif TODO_FILLER_WIDGET == "calendar" and calendar_events:
+                # One event at a time, rotating through up to 3 on a
+                # CALENDAR_ROTATE_SECONDS cycle (deterministic off the wall
+                # clock — no counter/state to maintain) — same "obviously
+                # only fits one" reasoning as the news headline above, but
+                # cycling since there's more than one thing worth surfacing.
+                idx = int(time.time() // CALENDAR_ROTATE_SECONDS) % len(calendar_events)
+                event = calendar_events[idx]
+
+                label_y = filler_y0 + 6
+                draw.text((col1_x, label_y), "UPCOMING", font=fonts['14'], fill=0)
+                time_str = _format_calendar_time(event['start_time'])
+                tw = text_width(draw, time_str, fonts['14'])
+                draw.text((col1_x + content_w - tw, label_y), time_str, font=fonts['14'], fill=0)
+
+                # A small dot row (filled = current position) so the
+                # rotation reads as "cycling through 3 things" rather than
+                # a single, seemingly-random event — only drawn when
+                # there's more than one to cycle through.
+                dots_h = 16 if len(calendar_events) > 1 else 0
+
+                title_font = fonts['24']
+                line_h = 30
+                max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
+                lines = wrap_lines_limited(draw, event['title'], title_font, content_w, max_lines=max_lines)
+                text_h = len(lines) * line_h
+                avail_h = filler_h - 30 - dots_h
+                text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
+                for li, line in enumerate(lines):
+                    lw = text_width(draw, line, title_font)
+                    draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                              line, font=title_font, fill=0)
+
+                if dots_h:
+                    dot_r, dot_gap = 4, 18
+                    n = len(calendar_events)
+                    start_x = col1_x + max(0, (content_w - (n - 1) * dot_gap) / 2)
+                    dot_y = filler_y0 + filler_h - 12
+                    for i in range(n):
+                        cx = start_x + i * dot_gap
+                        if i == idx:
+                            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), fill=0)
+                        else:
+                            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), outline=0, width=1)
+
             else:
-                # Nothing to show (fresh boot, missing API key, a fetch
-                # failure, or — NASA only — today's APOD is a video) —
-                # fall back to a row of cheerful faces, one per remaining
-                # slot, laid out side by side and centred in the filler
-                # block rather than stacked one per row — bigger and more
-                # legible than pinning each to its own narrow row band.
+                # Nothing to show (fresh boot, missing API key/config, a
+                # fetch failure, no calendar events pushed yet, or — NASA
+                # only — today's APOD is a video) — fall back to a row of
+                # cheerful faces, one per remaining slot, laid out side by
+                # side and centred in the filler block rather than
+                # stacked one per row — bigger and more legible than
+                # pinning each to its own narrow row band.
                 n_faces = TODO_MAX_TASKS - displayed_count
                 face_size = min(64, int(filler_h) - 20)
                 spacing = 16

@@ -225,27 +225,28 @@ silently showing yesterday's data.
 
 **The filler widget is a normal widget, not a leftover-space filler.**
 `displayed_count = min(len(todos), TODO_MAX_TASKS - 1)` always caps real
-task display one slot short of the full row count, so whichever of two
-sources `TODO_FILLER_WIDGET` (`"news"` | `"nasa"`, default `"news"`)
-selects always gets at least one row — even on a day with `TODO_MAX_TASKS`
-or more real tasks, which previously left it with zero space and made it
-vanish entirely. `TODO_FILLER_WIDGET` is a mode selector rather than two
-independent `ENABLE_*` flags, same reasoning as
+task display one slot short of the full row count, so whichever of three
+sources `TODO_FILLER_WIDGET` (`"news"` | `"nasa"` | `"calendar"`, default
+`"news"`) selects always gets at least one row — even on a day with
+`TODO_MAX_TASKS` or more real tasks, which previously left it with zero
+space and made it vanish entirely. `TODO_FILLER_WIDGET` is a mode
+selector rather than independent `ENABLE_*` flags, same reasoning as
 `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: exactly one fills that space at a
 time. Local default for now, intended to eventually be set remotely via
 `/api/widget-config` the same way those two are — see roadmap. When the
 active source has nothing to show — fresh boot, missing config file, a
-fetch failure, or (NASA only) a day it publishes a video instead of a
-photo — it falls back to `TODO_EMPTY_ROW_ICONS`: a row of smile/happy/laugh
-faces (one picked at random per remaining slot via `random.choice()`),
-laid out side by side and centred in the filler block rather than stacked
-one per row, sized to use the filler block's full height (up to 64px)
-rather than pinned to a single row's ~77px band. The filler block's own
-height still grows to fill whatever space real tasks don't use — one row
-when there are `TODO_MAX_TASKS - 1` or more tasks, more than one when
-there are fewer — it's only the *minimum* that's now guaranteed, not a
-fixed size. `update_data_thread` only polls whichever source is currently
-active, never both.
+fetch failure, (NASA only) a day it publishes a video instead of a photo,
+or (calendar only) no events pushed yet — it falls back to
+`TODO_EMPTY_ROW_ICONS`: a row of smile/happy/laugh faces (one picked at
+random per remaining slot via `random.choice()`), laid out side by side
+and centred in the filler block rather than stacked one per row, sized to
+use the filler block's full height (up to 64px) rather than pinned to a
+single row's ~77px band. The filler block's own height still grows to
+fill whatever space real tasks don't use — one row when there are
+`TODO_MAX_TASKS - 1` or more tasks, more than one when there are fewer —
+it's only the *minimum* that's now guaranteed, not a fixed size.
+`update_data_thread` only polls whichever source is currently active,
+never more than one.
 
 **`"news"`** shows one headline from NewsAPI.org's `/v2/top-headlines`
 (`fetch_news_headline()`) — a small "IN THE NEWS" label plus the
@@ -284,11 +285,47 @@ holds a gitignored `{"api_key": ...}` file, same pattern as `NEWS_API_CONF`.
 Polled hourly — APOD changes at most once a day, so anything faster is
 unnecessary load.
 
-Unlike the Tasks fetch itself, a failed fetch on either source does
-*not* clear the last good result (see `update_data_thread`) — a
-slightly stale headline or a day-old space photo isn't misleading the
-way a stale task list is, so both follow the file's usual "keep the
-last known value" convention instead of the Tasks-specific exception.
+**`"calendar"`** shows her next up-to-3 upcoming iPhone calendar events,
+one at a time, rotating every `CALENDAR_ROTATE_SECONDS` (60s, matched to
+`main()`'s own render cadence — a shorter value would just mean some
+redraws land in the same rotation bucket as the last, since the display
+can only change on an actual redraw). The rotation index is computed
+straight off the wall clock (`int(time.time() // CALENDAR_ROTATE_SECONDS)
+% len(calendar_events)`) rather than a counter in `data_store` — no state
+to persist between calls, and it stays correct even across a script
+restart. A small dot row at the bottom (filled = current position) marks
+it as "cycling through several things," not a single, seemingly-random
+event — only drawn when there's more than one event to cycle through.
+Each event shows a small "UPCOMING" label plus a formatted time
+(`_format_calendar_time()`: `"Today 3:00 PM"` / `"Tomorrow 9:00 AM"` /
+`"Fri 10:00 AM"` for anything further out — with at most 3 events shown,
+they're never more than about a week away, so a weekday name is
+unambiguous without the full date) and the event title, pixel-wrapped the
+same way the news headline is.
+
+There's no `GET /api/calendar-events` data source on the Pi's own
+initiative — the *source* of truth is her iPhone's Calendar app, which
+the companion app has no API access to. An iPhone Shortcuts automation
+(running on a schedule, e.g. hourly) reads her upcoming events with the
+"Find Calendar Events" action and `POST`s them to the companion app,
+which stores just the latest snapshot (trimmed to the 3 soonest,
+server-side, same "server does the slicing" precedent as
+`/api/tasks/top`). The Pi only ever polls that stored snapshot
+(`fetch_calendar_events()`) — same shared-secret auth
+(`waveshare_api_config.json`) as every other companion-app call, no
+separate credential needed. Polled every 300s — faster than news/NASA's
+hourly cadence, since "is this event starting soon" is more time-
+sensitive than a headline, even though the underlying data only actually
+changes whenever her Shortcut last ran. `events[:3]` in
+`fetch_calendar_events()` is a defensive cap in case the endpoint ever
+sends more than 3, since the dot-row math assumes it hasn't.
+
+Unlike the Tasks fetch itself, a failed fetch on any of the three
+sources does *not* clear the last good result (see `update_data_thread`)
+— a slightly stale headline, a day-old space photo, or a slightly stale
+event list isn't misleading the way a stale task list is, so all three
+follow the file's usual "keep the last known value" convention instead
+of the Tasks-specific exception.
 
 Distinct from the all-empty placeholder above, which replaces the whole
 column with one centred icon+message — this is the "some tasks done,

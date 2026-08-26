@@ -186,14 +186,14 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    the terminal. The script fetches and saves the tokens to `outlook_token.json`, and refreshes
    them automatically in the background from then on — no further logins needed.
 
-### Tasks widget filler: NewsAPI or NASA (pick one)
-The Tasks widget (`ENABLE_TODO`) always reserves at least one row for a filler widget — either a
-news headline or NASA's photo of the day, whichever `TODO_FILLER_WIDGET` in `main.py` names
-(`"news"` or `"nasa"`, defaults to `"news"`) — instead of a blank checkbox grid, even on a day with
-`TODO_MAX_TASKS` or more real tasks. Real tasks display up to `TODO_MAX_TASKS - 1` of them, one
-slot short of the full row count; on a lighter day, the filler grows to use whatever space the
-remaining tasks don't. Only one filler source is active at a time; you only need to set up the one
-you use.
+### Tasks widget filler: NewsAPI, NASA, or Calendar (pick one)
+The Tasks widget (`ENABLE_TODO`) always reserves at least one row for a filler widget — a news
+headline, NASA's photo of the day, or her next upcoming calendar events, whichever
+`TODO_FILLER_WIDGET` in `main.py` names (`"news"`, `"nasa"`, or `"calendar"`, defaults to `"news"`)
+— instead of a blank checkbox grid, even on a day with `TODO_MAX_TASKS` or more real tasks. Real
+tasks display up to `TODO_MAX_TASKS - 1` of them, one slot short of the full row count; on a
+lighter day, the filler grows to use whatever space the remaining tasks don't. Only one filler
+source is active at a time; you only need to set up the one you use.
 
 #### NewsAPI (`TODO_FILLER_WIDGET = "news"`)
 Shows a single Australian business headline.
@@ -219,6 +219,24 @@ Shows NASA's photo of the day, cropped to fill the filler widget's row(s).
 3. No further setup — same automatic polling as NewsAPI above. Without it, on a fetch failure, or
    on a day NASA publishes a video instead of a photo, the widget falls back to a cheerful face
    per empty row.
+
+#### Calendar (`TODO_FILLER_WIDGET = "calendar"`)
+Shows her next up-to-3 upcoming iPhone calendar events, rotating one at a time. Unlike NewsAPI/NASA,
+there's no third-party API key to configure — the source of truth is her iPhone's own Calendar app,
+which reaches the dashboard via an iPhone Shortcuts automation rather than a direct fetch:
+1. On her iPhone, open the **Shortcuts** app and create a new automation (e.g. hourly, or "when I
+   leave home") that:
+   - Runs **Find Calendar Events** (sorted soonest-first, limited to the next few).
+   - Builds a JSON array of `{"title": ..., "start_time": ...}` objects (an ISO 8601 timestamp with
+     UTC offset, e.g. `2026-08-27T15:00:00+10:00`) from the results.
+   - `POST`s that array to `https://YOUR-APP.pages.dev/api/calendar-events` with the same
+     `X-Api-Key` header/value already in `waveshare_api_config.json`.
+2. The companion app stores just the latest snapshot (trimmed to the 3 soonest events) — no
+   history, no separate database table to manage on the Pi's side.
+3. No further setup on the Pi — it polls that stored snapshot automatically once
+   `waveshare_api_config.json` exists (the same file the todos/water/widget-config endpoints already
+   use). Without it, on a fetch failure, or before her Shortcut has run for the first time, the
+   widget falls back to a cheerful face per empty row.
 
 ---
 
