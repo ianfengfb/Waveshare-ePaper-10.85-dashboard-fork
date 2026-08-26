@@ -704,6 +704,64 @@ line is centred independently, and lines are stacked with a
 size-proportional gap (`0.3 * font.size`) around their combined real
 height, then that whole block is centred vertically on the screen.
 
+## System status reporting (POST /api/system-status)
+
+The upstream project displayed Pi health (CPU load, RAM free, internet
+ping) as an on-screen fallback widget in Column 1, shown when
+Strava/Roborock/Antigravity aren't configured (the `SysLoad`/`Ping`
+branches in `update_data_thread`). In this fork, Column 1 is
+permanently taken over by the Tasks widget instead (`ENABLE_TODO`
+defaults `True`), so that fallback path's `draw.text()` calls never
+actually run — but the *reads* powering them still happen every cycle,
+for a widget slot that's always hidden. Rather than compete for screen
+space that's already spoken for, this reports the same kind of data
+outward to the companion app instead, where it's free to be its own
+page/panel. There's no `ENABLE_*` flag for this — like
+`fetch_todos_data()`/`fetch_water_status()`, it self-gates purely on
+`waveshare_api_config.json` existing (see "Companion web app" above),
+consistent with every other companion-app call in this file.
+
+**This is a fresh, independent read path, not a repurposing of
+`data_store.sysload`/`data_store.ping`.** Those two still work exactly
+as before and remain wired to the legacy on-screen fallback widgets
+(untouched, in case Strava/Roborock/Antigravity ever get re-enabled and
+that fallback path draws again) — `gather_system_status()` reads
+`/proc`, `/sys`, and pings 8.8.8.8 on its own, independently of whether
+those widgets are currently gated on or off, since the whole point is
+this reports regardless of what's on screen.
+
+**Fields sent** (`gather_system_status()`), each independently
+best-effort — a failed read returns `None` for just that field rather
+than dropping the whole report, since one unreadable `/proc` file
+shouldn't cost every other metric; the companion app should treat a
+`null` field as "unknown", not zero:
+- `cpu_load_pct` — same heuristic as the SysLoad widget (1-min loadavg ×
+  10, capped at 100); a rough load indicator, not a literal percentage
+- `ram_free_mb` — from `/proc/meminfo`
+- `cpu_temp_c` — from the Pi's thermal zone
+  (`/sys/class/thermal/thermal_zone0/temp`); doesn't exist on non-Pi
+  systems (this repo's own Windows/macOS `render_preview.py` path
+  included), so `None` there is expected, not an error
+- `disk_free_mb`/`disk_total_mb` — root filesystem, via
+  `shutil.disk_usage('/')`; catches an SD card slowly filling with logs
+  over months of unattended operation, the kind of failure that's only
+  noticed once it's already full
+- `uptime_seconds` — from `/proc/uptime`; flags a silent reboot (power
+  blip, crash, watchdog) between checks
+- `ping_ms` — same ICMP-to-8.8.8.8 check as the Ping fallback widget
+
+Deliberately excludes crypto prices (BTC/ETH) — that's market-data
+novelty from the same "hide the unused fallback widgets" family, not Pi
+health, so it isn't part of this report.
+
+**Cadence: every 300s.** Slower than `away_message` (15s) or
+`water`/`hydration` (20s) since nothing here needs to be caught within
+minutes — it's a vitals check, not something driving an on-screen
+pop-up. `post_system_status()` is fire-and-forget: unlike every GET
+fetch in this file, there's no `data_store` field to write and no "last
+known value" to keep, since nothing about this is ever displayed on the
+Pi's own screen — that's the whole premise.
+
 ## Roadmap (not yet built — one session per item)
 
 These are planned follow-ups; each is its own scoped session. Keep the

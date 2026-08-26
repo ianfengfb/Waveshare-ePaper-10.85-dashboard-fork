@@ -14,6 +14,7 @@ import json
 import asyncio
 import pickle
 import subprocess
+import shutil
 import math
 import random
 import urllib.parse
@@ -546,7 +547,7 @@ class DataStore:
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
             'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0,
-            'nasa_apod': 0, 'away_message': 0
+            'nasa_apod': 0, 'away_message': 0, 'system_status': 0
         }
 
 
@@ -1425,6 +1426,108 @@ def fetch_away_message():
     }
 
 
+# --- SYSTEM STATUS REPORTING ---
+# The original upstream project displayed Pi health (CPU/RAM/ping) as an
+# on-screen fallback widget when Strava/Roborock/Antigravity aren't
+# configured (see the SysLoad/Ping branches in update_data_thread). This
+# fork's Column 1 is permanently taken over by the Tasks widget instead
+# (ENABLE_TODO), so that fallback path never actually draws — meaning
+# those reads already happen every cycle for a widget slot that's always
+# hidden. Rather than fight for screen space, this reports the same kind
+# of data to the companion app instead, where it can be its own page —
+# see CLAUDE.md for the metric list and POST cadence.
+
+def _read_cpu_load_pct():
+    """Same heuristic as the SysLoad fallback widget (1-minute loadavg *
+    10, capped at 100) for continuity with that widget's existing number,
+    even though the two are now independent code paths — not a literal
+    percentage, just a rough load indicator good enough for a single/dual
+    -core Pi Zero."""
+    try:
+        with open('/proc/loadavg', 'r') as f:
+            load1 = float(f.read().split()[0])
+        return min(int(load1 * 10), 100)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _read_ram_free_mb():
+    try:
+        with open('/proc/meminfo', 'r') as f:
+            lines = f.readlines()
+        return int(lines[1].split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _read_cpu_temp_c():
+    """The Raspberry Pi SoC's thermal zone — doesn't exist on non-Pi
+    systems (e.g. this repo's own Windows/macOS render_preview.py path),
+    so a missing file there is expected, not an error."""
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+            millidegrees = int(f.read().strip())
+        return round(millidegrees / 1000, 1)
+    except (OSError, ValueError):
+        return None
+
+
+def _read_disk_usage_mb():
+    try:
+        usage = shutil.disk_usage('/')
+        return {'total_mb': usage.total // (1024 * 1024), 'free_mb': usage.free // (1024 * 1024)}
+    except OSError:
+        return None
+
+
+def _read_uptime_seconds():
+    try:
+        with open('/proc/uptime', 'r') as f:
+            return int(float(f.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _read_ping_ms():
+    try:
+        out = subprocess.check_output(['ping', '-c', '1', '-W', '1', '8.8.8.8']).decode('utf-8')
+        return float(out.split('time=')[1].split(' ms')[0])
+    except Exception:
+        return None
+
+
+def gather_system_status():
+    """Pulls together everything POST /api/system-status sends — see
+    CLAUDE.md. Every field is independently best-effort (None on failure)
+    so one unreadable /proc file doesn't drop the whole report; the
+    companion app should treat a null field as "unknown", not zero."""
+    disk = _read_disk_usage_mb()
+    return {
+        'cpu_load_pct': _read_cpu_load_pct(),
+        'ram_free_mb': _read_ram_free_mb(),
+        'cpu_temp_c': _read_cpu_temp_c(),
+        'disk_free_mb': disk['free_mb'] if disk else None,
+        'disk_total_mb': disk['total_mb'] if disk else None,
+        'uptime_seconds': _read_uptime_seconds(),
+        'ping_ms': _read_ping_ms(),
+    }
+
+
+def post_system_status():
+    """POST /api/system-status. Fire-and-forget, no data_store write —
+    unlike every GET fetch in this file, nothing about this is displayed
+    on the Pi's own screen (that's the whole point, see CLAUDE.md), so
+    there's no "last known value" to keep locally. Silently no-ops
+    without a config file, same convention as every other companion-app
+    call in this file."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return
+    url = f"{conf['base_url'].rstrip('/')}/api/system-status"
+    headers = {'X-Api-Key': conf['api_key'], 'Content-Type': 'application/json'}
+    net.get_json(url, headers=headers, data=json.dumps(gather_system_status()), method='POST')
+
+
 def _load_news_api_key():
     """Reads {"api_key": ...} from NEWS_API_CONF's gitignored CONFIG_FILE.
     Missing file or missing key both return None, same "no config -> no-op"
@@ -1778,6 +1881,14 @@ def update_data_thread():
                 with data_store.lock:
                     data_store.away_message = am_data
             data_store.last_update['away_message'] = now
+
+        # Pi health, reported outward rather than drawn on screen (see
+        # gather_system_status() above) — 300s is plenty for a "vitals"
+        # check that isn't meant to catch anything within minutes, unlike
+        # away_message/water above.
+        if now - data_store.last_update['system_status'] > 300:
+            post_system_status()
+            data_store.last_update['system_status'] = now
 
         # Companion app: todos want to feel reasonably fresh (120s), widget
         # config is more "check every so often" (600s) — see CLAUDE.md's
