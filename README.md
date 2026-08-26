@@ -217,14 +217,6 @@ Shows NASA's photo of the day, cropped to fill the leftover space.
    on a day NASA publishes a video instead of a photo, the widget falls back to a cheerful face
    per empty row.
 
-#### Personal photo fallback (optional, either mode)
-Before falling back to the smile/happy/laugh faces, the widget checks for a personal photo at
-`assets/todo_fallback_photo.png` and shows that instead if present. **This file is gitignored on
-purpose** — it's a real photo, not a secret, but the same "never commit this" reasoning applies,
-since it's very hard to fully remove something once it's in git history. Drop your own photo at
-that path — greyscale conversion and sizing happen automatically at render time — on each
-deployment where you want it. A fresh checkout with no file there just uses the faces, no error.
-
 ---
 
 ## Running the Dashboard
