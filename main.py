@@ -127,6 +127,7 @@ API_ENDPOINTS = {
     'outlook_token': 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     'outlook_messages': 'https://graph.microsoft.com/v1.0/me/messages',
     'affirmation': 'https://www.affirmations.dev',
+    'news_top_headlines': 'https://newsapi.org/v2/top-headlines',
 }
 
 # --- CONFIGURATION ---
@@ -258,6 +259,31 @@ STRAVA_CONF = {
 WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
+
+# NewsAPI.org — free key from newsapi.org, entered once by hand into a
+# gitignored config file, same "never commit a secret" pattern as every
+# other credential in this file (a single flat key, like NASA_APOD_CONF
+# would have been — just one thing to configure). NewsAPI's free
+# "Developer" plan is contractually development/testing-only (no
+# production or commercial use per their ToS) and delays articles by
+# 24h — acceptable for this personal, non-commercial dashboard, but
+# worth knowing if this ever became a public/commercial project.
+NEWS_API_CONF = {
+    'CONFIG_FILE': os.path.join(BASE_DIR, 'news_api_config.json')
+}
+# Country + category rather than a keyword search, since a tax
+# accountant's relevant reading is "Australian business/finance news"
+# generally, not literally tax-specific every single day — a keyword-only
+# query like "tax OR ATO" would come up empty on plenty of days. NewsAPI
+# has no city-level filtering (nothing more specific than country to
+# target "Canberra" with), so this is the closest available match.
+NEWS_COUNTRY = 'au'
+NEWS_CATEGORY = 'business'
+# If any headline in the fetched batch contains one of these, it's
+# preferred over the plain top story — a lightweight nudge towards
+# "actually relevant to a tax accountant" without narrowing the query
+# itself and risking an empty result on quiet news days.
+NEWS_PREFERRED_KEYWORDS = ['tax', 'ato', 'accountant', 'accounting', 'super', 'budget']
 
 # --- FILES & SCOPES ---
 GMAIL_TOKEN_PATH = os.path.join(BASE_DIR, 'token.json')
@@ -454,12 +480,16 @@ class DataStore:
             'progress_litres': 0.0, 'last_logged_at': None,
             'last_amount_litres': None, 'plants_grown_lifetime': 0
         }
+        # A single headline string that fills the Tasks widget's leftover
+        # rows, or None — see fetch_news_headline(). None falls back to
+        # TODO_EMPTY_ROW_ICONS.
+        self.news_headline = None
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
-            'todos': 0, 'widget_config': 0, 'water': 0
+            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0
         }
 
 
@@ -1291,6 +1321,57 @@ def fetch_water_status():
     }
 
 
+def _load_news_api_key():
+    """Reads {"api_key": ...} from NEWS_API_CONF's gitignored CONFIG_FILE.
+    Missing file or missing key both return None, same "no config -> no-op"
+    convention as _load_waveshare_api_config()."""
+    if not os.path.exists(NEWS_API_CONF['CONFIG_FILE']):
+        return None
+    try:
+        with open(NEWS_API_CONF['CONFIG_FILE'], 'r') as f:
+            conf = json.load(f)
+        return conf.get('api_key') or None
+    except Exception:
+        return None
+
+
+def fetch_news_headline():
+    """GET /v2/top-headlines?country=au&category=business. Returns a
+    single headline string, or None (missing config, network/HTTP
+    failure, or no usable articles in the response). NewsAPI has no
+    city-level targeting, so country+category (see NEWS_COUNTRY/
+    NEWS_CATEGORY above) is the closest available match for "news a tax
+    accountant in Canberra would want" — this then prefers whichever
+    fetched headline contains a NEWS_PREFERRED_KEYWORDS hit over the
+    plain top story, falling back to the top story if none match, rather
+    than narrowing the query itself and risking an empty result on a
+    quiet news day. Titles come back as "Headline - Publisher"; the
+    publisher suffix is left in place — it's useful context, not noise,
+    and the widget only shows one line anyway."""
+    api_key = _load_news_api_key()
+    if not api_key:
+        return None
+    url = (
+        f"{API_ENDPOINTS['news_top_headlines']}?country={NEWS_COUNTRY}"
+        f"&category={NEWS_CATEGORY}&pageSize=10&apiKey={api_key}"
+    )
+    data = net.get_json(url, timeout=10)
+    if not isinstance(data, dict) or data.get('status') != 'ok':
+        return None
+
+    titles = [
+        a.get('title') for a in data.get('articles', [])
+        if isinstance(a, dict) and a.get('title') and a.get('title') != '[Removed]'
+    ]
+    if not titles:
+        return None
+
+    for title in titles:
+        if any(kw in title.lower() for kw in NEWS_PREFERRED_KEYWORDS):
+            return title
+    return titles[0]
+
+
 def update_data_thread():
     global global_printer, EMAIL_PROVIDER, MIDDLE_COLUMN_WIDGET
 
@@ -1561,6 +1642,20 @@ def update_data_thread():
                     MIDDLE_COLUMN_WIDGET = middle_widget
             data_store.last_update['widget_config'] = now
 
+        # Hourly is already far more often than needed — NewsAPI's free
+        # tier delays articles by 24h anyway, and the 100-req/day cap
+        # leaves a lot of headroom at this cadence. Only updates
+        # data_store on success, same "don't blank a working widget on
+        # one bad fetch" convention as most fetches in this file (unlike
+        # the Tasks fetch itself) — a slightly stale headline isn't
+        # misleading the way a stale task list is.
+        if ENABLE_TODO and now - data_store.last_update['news_headline'] > 3600:
+            headline = fetch_news_headline()
+            if headline is not None:
+                with data_store.lock:
+                    data_store.news_headline = headline
+            data_store.last_update['news_headline'] = now
+
         gc.collect()
         time.sleep(1)
 
@@ -1784,6 +1879,7 @@ def render_screen(epd, fonts):
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
         todos = data_store.todos.copy() if data_store.todos is not None else None
+        news_headline = data_store.news_headline
         water = data_store.water.copy()
     finally:
         data_store.lock.release()
@@ -1834,20 +1930,8 @@ def render_screen(epd, fonts):
             title_x = col1_x + checkbox_size + 8
             title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
 
-            for i in range(TODO_MAX_TASKS):
+            for i in range(min(len(todos), TODO_MAX_TASKS)):
                 row_y = row_top + i * row_h
-
-                if i >= len(todos):
-                    # Fewer tasks than row slots today — fill the leftover
-                    # rows with a cheerful face instead of a blank checkbox,
-                    # rather than a repeated empty outline with no task.
-                    face_size = min(36, row_h - 10)
-                    face_x = col1_x + (content_w - face_size) / 2
-                    face_y = row_y + (row_h - face_size) / 2 - 3
-                    draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
-                              (int(face_size), int(face_size)))
-                    continue
-
                 cb_y = row_y + 4
                 completed = todos[i].get('completed', False)
 
@@ -1885,6 +1969,43 @@ def render_screen(epd, fonts):
                 if i < TODO_MAX_TASKS - 1:
                     sep_y = row_y + row_h - 6
                     draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
+
+            if len(todos) < TODO_MAX_TASKS:
+                leftover_y0 = row_top + len(todos) * row_h
+                leftover_h = row_bottom - leftover_y0
+
+                if news_headline:
+                    # One headline spanning the whole leftover block, not
+                    # one per row — "obviously only fits one" per the ask.
+                    # A small label first so a lone sentence doesn't look
+                    # like a stray fragment; the headline itself is
+                    # pixel-wrapped since it's unpredictable external text,
+                    # same reasoning as task titles/due times.
+                    label_y = leftover_y0 + 6
+                    draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
+
+                    headline_font = fonts['24']
+                    line_h = 30
+                    max_lines = max(1, int((leftover_h - 30) / line_h))
+                    lines = wrap_lines_limited(draw, news_headline, headline_font, content_w, max_lines=max_lines)
+                    text_h = len(lines) * line_h
+                    text_y0 = label_y + 24 + max(0, (leftover_h - 30 - text_h) / 2)
+                    for li, line in enumerate(lines):
+                        lw = text_width(draw, line, headline_font)
+                        draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                                  line, font=headline_font, fill=0)
+
+                else:
+                    # No headline yet (fresh boot, missing API key, or a
+                    # fetch failure) — fall back to a cheerful face per
+                    # remaining row rather than a blank checkbox grid.
+                    for i in range(len(todos), TODO_MAX_TASKS):
+                        row_y = row_top + i * row_h
+                        face_size = min(36, row_h - 10)
+                        face_x = col1_x + (content_w - face_size) / 2
+                        face_y = row_y + (row_h - face_size) / 2 - 3
+                        draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
+                                  (int(face_size), int(face_size)))
 
     else:
         # Widget 1: Strava or SysLoad

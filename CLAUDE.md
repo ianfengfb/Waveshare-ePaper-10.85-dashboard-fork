@@ -224,14 +224,44 @@ crypto price isn't, so for this widget an honest "can't connect" beats
 silently showing yesterday's data.
 
 **Partially-empty rows**: when there are fewer real tasks than
-`TODO_MAX_TASKS` (the common case), the leftover rows show a cheerful face
-(`TODO_EMPTY_ROW_ICONS` — smile/happy/laugh, one picked at random per row
-via `random.choice()`) instead of a blank outlined checkbox, and skip the
-row separator line entirely so the faces read as open decorative space
-rather than more empty grid rows. Distinct from the all-empty placeholder
-above, which replaces the whole column with one centred icon+message —
-this is the "some tasks done, rest of the day is clear" case instead of
-"nothing at all today".
+`TODO_MAX_TASKS` (the common case), the leftover space fills with one
+headline from NewsAPI.org's `/v2/top-headlines` (`fetch_news_headline()`)
+— a small "IN THE NEWS" label plus the headline, pixel-wrapped across
+however many lines the leftover block has room for (same
+`wrap_lines_limited()` truncation every other externally-sourced string
+in this file uses). Falls back to `TODO_EMPTY_ROW_ICONS` (smile/happy/laugh
+faces, one picked at random per remaining row via `random.choice()`, no
+row separator so they read as open decorative space) when
+`data_store.news_headline` is `None` — fresh boot, no
+`news_api_config.json`, or a fetch failure.
+
+`NEWS_COUNTRY`/`NEWS_CATEGORY` (`"au"`/`"business"`) query general
+Australian business news rather than a tax-specific keyword search —
+NewsAPI has no city-level targeting (nothing closer to "Canberra" than
+the country code), and a keyword-only query like `q=tax OR ATO` would
+come up empty on plenty of days, which a country+category feed never
+does. `NEWS_PREFERRED_KEYWORDS` then re-ranks *within* that always-populated
+batch: `fetch_news_headline()` returns the first fetched headline
+containing one of those keywords, falling back to the plain top story
+if none match, so the query itself never narrows and risks emptiness —
+only the choice among an already-non-empty result does.
+
+Unlike the Tasks fetch itself, a failed headline fetch does *not* clear
+the last good headline (see `update_data_thread`) — a slightly stale
+headline isn't misleading the way a stale task list is, so this follows
+the file's usual "keep the last known value" convention instead of the
+Tasks-specific exception. Polled hourly (`ENABLE_TODO`-gated) — NewsAPI's
+free "Developer" plan delays articles by 24h anyway and caps at 100
+requests/day, so anything faster buys nothing. `NEWS_API_CONF` holds a
+gitignored `{"api_key": ...}` file, same never-commit-a-secret pattern as
+every other credential here. **Note on that free plan**: NewsAPI's ToS
+restricts it to development/testing, not production or commercial use —
+a judgement call to run it on a personal, non-commercial dashboard like
+this one, but worth knowing if this project's use ever changed.
+
+Distinct from the all-empty placeholder above, which replaces the whole
+column with one centred icon+message — this is the "some tasks done,
+rest of the day is clear" case instead of "nothing at all today".
 
 ### Middle column: Spotify or Weather, switchable via MIDDLE_COLUMN_WIDGET
 

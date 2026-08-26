@@ -186,6 +186,21 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    the terminal. The script fetches and saves the tokens to `outlook_token.json`, and refreshes
    them automatically in the background from then on — no further logins needed.
 
+### NewsAPI (Tasks widget filler)
+When the Tasks widget (`ENABLE_TODO`) has fewer than `TODO_MAX_TASKS` tasks for the day, the
+leftover space fills with a single Australian business headline instead of a blank checkbox grid.
+1. Get a free API key from [newsapi.org](https://newsapi.org/register) (instant, no approval wait).
+   Note: NewsAPI's free "Developer" plan is contractually development/testing-only (not for
+   production or commercial use) per their terms of service, and delays articles by 24 hours —
+   a judgement call to run on a personal, non-commercial dashboard like this one.
+2. Create `news_api_config.json` in the project root (gitignored, same as every other credential
+   file here):
+   ```json
+   { "api_key": "your-key-here" }
+   ```
+3. No further setup — `update_data_thread` starts polling it automatically once the file exists.
+   Without it (or on a fetch failure), the widget falls back to a cheerful face per empty row.
+
 ---
 
 ## Running the Dashboard
