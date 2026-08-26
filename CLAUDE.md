@@ -230,13 +230,14 @@ default `"news"`) selects — a mode selector rather than two independent
 `ENABLE_*` flags, same reasoning as `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`:
 exactly one fills that space at a time. Local default for now, intended
 to eventually be set remotely via `/api/widget-config` the same way
-those two are — see roadmap. Both fall back to `TODO_EMPTY_ROW_ICONS`
-(smile/happy/laugh faces, one picked at random per remaining row via
-`random.choice()`, no row separator so they read as open decorative
-space) when the active source has nothing to show — fresh boot, missing
-config file, a fetch failure, or (NASA only) a day it publishes a video
-instead of a photo. `update_data_thread` only polls whichever source is
-currently active, never both.
+those two are — see roadmap. When the active source has nothing to show
+— fresh boot, missing config file, a fetch failure, or (NASA only) a day
+it publishes a video instead of a photo — it falls back to
+`get_todo_fallback_photo()` (see "Tasks widget photo fallback" below) if
+one's configured, and only then to `TODO_EMPTY_ROW_ICONS` (smile/happy/laugh
+faces, one picked at random per remaining row via `random.choice()`, no
+row separator so they read as open decorative space). `update_data_thread`
+only polls whichever source is currently active, never both.
 
 **`"news"`** shows one headline from NewsAPI.org's `/v2/top-headlines`
 (`fetch_news_headline()`) — a small "IN THE NEWS" label plus the
@@ -280,6 +281,34 @@ Unlike the Tasks fetch itself, a failed fetch on either source does
 slightly stale headline or a day-old space photo isn't misleading the
 way a stale task list is, so both follow the file's usual "keep the
 last known value" convention instead of the Tasks-specific exception.
+
+**Tasks widget photo fallback**: `get_todo_fallback_photo()` loads
+`TODO_FALLBACK_PHOTO_PATH` (`assets/todo_fallback_photo.png`) once and
+caches it — a static local file, not something that changes at runtime
+the way the news/NASA fetches do. Deliberately **not committed to the
+repo** (gitignored, see `.gitignore`'s "Personal photo(s)" entry): unlike
+every other credential this file gitignores, this one is a real photo of
+a family member, not a secret — but the reasoning for keeping it out of
+git history is the same "never commit this" instinct, since git history
+is effectively permanent and hard to fully scrub once pushed. Each
+deployment drops its own file at that path by hand; a fresh checkout
+with no file there is the expected default, not an error, and falls
+through to `TODO_EMPTY_ROW_ICONS` exactly as if no photo fallback
+existed.
+
+Uses contain-fit (`_contain_fit_image()` — scale to fit entirely within
+the leftover box, centred, letterboxed on white) rather than the
+cover-crop `ImageOps.fit()` uses for NASA/Spotify art, and real
+(Floyd-Steinberg) dithering rather than the hard threshold those two
+use — both deliberate departures for this one case. A face has to stay
+*whole* to stay recognisable (cover-cropping a portrait into a
+letterbox-wide leftover box can crop out everything but hair — tested
+and rejected), and a portrait's soft gradients (skin, background) need
+the halftone pattern real dithering produces; a hard threshold collapses
+a face into a harsh black/white mask with none of the shading that makes
+it recognisable. Neither trade-off applies to NASA's already-busy space
+photos or Spotify's high-contrast cover art, which is why those two keep
+the cover-fit/threshold combination.
 
 Distinct from the all-empty placeholder above, which replaces the whole
 column with one centred icon+message — this is the "some tasks done,

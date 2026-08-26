@@ -176,6 +176,12 @@ TODO_MAX_TASKS = 5
 # an empty outline repeated a few times. Picked per row via random.choice()
 # so a short list doesn't always show the same face in the same slot.
 TODO_EMPTY_ROW_ICONS = ["icon_face_smile", "icon_face_happy", "icon_face_laugh"]
+# A personal photo shown instead of TODO_EMPTY_ROW_ICONS when present —
+# checked before falling back to the faces. Deliberately NOT committed to
+# the repo (gitignored — see .gitignore) since it's a real photo of a
+# family member; each deployment drops its own file at this path. Missing
+# file is the expected state for a fresh checkout, not an error.
+TODO_FALLBACK_PHOTO_PATH = os.path.join(BASE_DIR, 'assets', 'todo_fallback_photo.png')
 # Manual-testing seed only — NOT used as a live default any more now that
 # GET /api/tasks/top is live (see fetch_todos_data()); data_store.todos
 # starts at None (see DataStore) so a real "no data yet"/"fetch failed"
@@ -548,6 +554,41 @@ def get_cached_icon(name, size, is_white=False):
         else:
             icon_cache[key] = None
     return icon_cache.get(key)
+
+
+_todo_fallback_photo_cache = {}
+
+
+def get_todo_fallback_photo():
+    """Loads TODO_FALLBACK_PHOTO_PATH once and caches it (it's a static
+    local file, not something that changes at runtime, unlike the
+    network-fetched news headline/NASA photo it stands in for). Returns a
+    greyscale PIL Image, or None if the file doesn't exist — same
+    graceful-degradation shape as get_cached_icon() above."""
+    if 'image' not in _todo_fallback_photo_cache:
+        img = None
+        if os.path.exists(TODO_FALLBACK_PHOTO_PATH):
+            try:
+                img = Image.open(TODO_FALLBACK_PHOTO_PATH).convert('L')
+            except Exception:
+                img = None
+        _todo_fallback_photo_cache['image'] = img
+    return _todo_fallback_photo_cache['image']
+
+
+def _contain_fit_image(img, box_w, box_h):
+    """Scale img to fit entirely within box_w x box_h (preserving aspect
+    ratio) and centre it on a white canvas of exactly that size — the
+    opposite trade-off from ImageOps.fit()'s cover-crop (used for NASA's
+    photo and Spotify's album art): a face needs to stay *whole* to stay
+    recognisable, where a scenic/graphic image reads better filling the
+    frame than letterboxed."""
+    canvas = Image.new('L', (box_w, box_h), 255)
+    ratio = min(box_w / img.width, box_h / img.height)
+    new_size = (max(1, int(img.width * ratio)), max(1, int(img.height * ratio)))
+    resized = img.resize(new_size, Image.LANCZOS)
+    canvas.paste(resized, ((box_w - new_size[0]) // 2, (box_h - new_size[1]) // 2))
+    return canvas
 
 
 def time_until(iso_str):
@@ -2093,17 +2134,37 @@ def render_screen(epd, fonts):
                     Himage.paste(dithered, (col1_x, int(leftover_y0)))
 
                 else:
-                    # Nothing to show yet (fresh boot, missing API key, a
-                    # fetch failure, or — NASA only — today's APOD is a
-                    # video) — fall back to a cheerful face per remaining
-                    # row rather than a blank checkbox grid.
-                    for i in range(len(todos), TODO_MAX_TASKS):
-                        row_y = row_top + i * row_h
-                        face_size = min(36, row_h - 10)
-                        face_x = col1_x + (content_w - face_size) / 2
-                        face_y = row_y + (row_h - face_size) / 2 - 3
-                        draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
-                                  (int(face_size), int(face_size)))
+                    fallback_photo = get_todo_fallback_photo()
+                    if fallback_photo is not None:
+                        # A personal photo, when one's been dropped in
+                        # locally, beats the generic faces — see
+                        # TODO_FALLBACK_PHOTO_PATH. Contain-fit (whole
+                        # image visible, letterboxed) rather than the
+                        # cover-crop NASA/Spotify use: a face needs to
+                        # stay whole to stay recognisable, especially in
+                        # the shortest (single-row) leftover box.
+                        fitted = _contain_fit_image(fallback_photo, int(content_w), int(leftover_h))
+                        fitted = ImageEnhance.Contrast(fitted).enhance(1.5)
+                        # Real (Floyd-Steinberg) dithering, not the hard
+                        # threshold used for NASA/Spotify art — a portrait's
+                        # soft gradients need the halftone pattern to stay
+                        # recognisable; a plain threshold collapses a face
+                        # into a harsh black/white mask.
+                        dithered = fitted.convert("1")
+                        Himage.paste(dithered, (col1_x, int(leftover_y0)))
+                    else:
+                        # Nothing to show at all (fresh boot, missing API
+                        # key, a fetch failure, no fallback photo dropped
+                        # in, or — NASA only — today's APOD is a video) —
+                        # fall back to a cheerful face per remaining row
+                        # rather than a blank checkbox grid.
+                        for i in range(len(todos), TODO_MAX_TASKS):
+                            row_y = row_top + i * row_h
+                            face_size = min(36, row_h - 10)
+                            face_x = col1_x + (content_w - face_size) / 2
+                            face_y = row_y + (row_h - face_size) / 2 - 3
+                            draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
+                                      (int(face_size), int(face_size)))
 
     else:
         # Widget 1: Strava or SysLoad

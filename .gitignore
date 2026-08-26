@@ -24,3 +24,7 @@ roborock_stats.json
 waveshare_api_config.json
 news_api_config.json
 nasa_apod_config.json
+
+# Personal photo(s) for the Tasks widget fallback — kept local, never
+# committed (see CLAUDE.md's "Tasks widget photo fallback" section).
+assets/todo_fallback_photo.png
