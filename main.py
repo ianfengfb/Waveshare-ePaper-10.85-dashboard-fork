@@ -1671,19 +1671,29 @@ def fetch_calendar_events():
     return events[:3]
 
 
-def _format_calendar_time(iso_str):
-    """Formats an event's ISO 8601 start time (with UTC offset, from the
-    companion app) relative to today: "Today 3:00 PM", "Tomorrow 9:00 AM",
-    or "Fri 10:00 AM" for anything further out — with at most 3 events
-    ever shown, they're never more than about a week away, so a weekday
-    name plus time is unambiguous without needing the full date too.
-    Compares against the Pi's own local clock/timezone (`.astimezone()`
-    with no explicit zone), same convention as the local-midnight
-    calculation elsewhere in this file — it trusts the Pi's system
-    timezone to already be set correctly."""
+def _parse_calendar_time(iso_str):
+    """Parses an event's ISO 8601 start time (with UTC offset, from the
+    companion app) into a local, timezone-aware datetime, or None if it's
+    missing/malformed. Shared by _format_calendar_time() (display) and
+    render_screen()'s past-event filter (see CLAUDE.md) so both agree on
+    what a given timestamp actually means."""
     try:
-        dt = datetime.fromisoformat(iso_str).astimezone()
+        return datetime.fromisoformat(iso_str).astimezone()
     except (ValueError, TypeError):
+        return None
+
+
+def _format_calendar_time(iso_str):
+    """Formats an event's start time relative to today: "Today 3:00 PM",
+    "Tomorrow 9:00 AM", or "Fri 10:00 AM" for anything further out — with
+    at most 3 events ever shown, they're never more than about a week
+    away, so a weekday name plus time is unambiguous without needing the
+    full date too. Compares against the Pi's own local clock/timezone,
+    same convention as the local-midnight calculation elsewhere in this
+    file — it trusts the Pi's system timezone to already be set
+    correctly."""
+    dt = _parse_calendar_time(iso_str)
+    if dt is None:
         return ""
     today = datetime.now().astimezone().date()
     time_str = dt.strftime("%I:%M %p").lstrip("0")
@@ -2413,6 +2423,22 @@ def render_screen(epd, fonts):
             filler_y0 = row_top + displayed_count * row_h
             filler_h = row_bottom - filler_y0
 
+            # Unlike a headline or a photo, a calendar event carries its
+            # own "is this still valid" signal — its start time. Dropped
+            # here rather than at fetch time, since an event that was
+            # still upcoming at the last poll can lapse before the next
+            # one; this way a stale snapshot (her Shortcut hasn't run in a
+            # while) degrades to fewer events, or the fallback faces if
+            # all three have passed, instead of rotating through events
+            # that have obviously already happened.
+            upcoming_calendar_events = []
+            if calendar_events:
+                now_dt = datetime.now().astimezone()
+                for ev in calendar_events:
+                    parsed = _parse_calendar_time(ev['start_time'])
+                    if parsed is not None and parsed >= now_dt:
+                        upcoming_calendar_events.append(ev)
+
             if TODO_FILLER_WIDGET == "news" and news_headline:
                 # One headline spanning the whole filler block, not one
                 # per row — "obviously only fits one" per the ask. A small
@@ -2447,14 +2473,14 @@ def render_screen(epd, fonts):
                 dithered = fitted.convert("1", dither=Image.NONE)
                 Himage.paste(dithered, (col1_x, int(filler_y0)))
 
-            elif TODO_FILLER_WIDGET == "calendar" and calendar_events:
+            elif TODO_FILLER_WIDGET == "calendar" and upcoming_calendar_events:
                 # One event at a time, rotating through up to 3 on a
                 # CALENDAR_ROTATE_SECONDS cycle (deterministic off the wall
                 # clock — no counter/state to maintain) — same "obviously
                 # only fits one" reasoning as the news headline above, but
                 # cycling since there's more than one thing worth surfacing.
-                idx = int(time.time() // CALENDAR_ROTATE_SECONDS) % len(calendar_events)
-                event = calendar_events[idx]
+                idx = int(time.time() // CALENDAR_ROTATE_SECONDS) % len(upcoming_calendar_events)
+                event = upcoming_calendar_events[idx]
 
                 label_y = filler_y0 + 6
                 draw.text((col1_x, label_y), "UPCOMING", font=fonts['14'], fill=0)
@@ -2466,7 +2492,7 @@ def render_screen(epd, fonts):
                 # rotation reads as "cycling through 3 things" rather than
                 # a single, seemingly-random event — only drawn when
                 # there's more than one to cycle through.
-                dots_h = 16 if len(calendar_events) > 1 else 0
+                dots_h = 16 if len(upcoming_calendar_events) > 1 else 0
 
                 title_font = fonts['24']
                 line_h = 30
@@ -2482,7 +2508,7 @@ def render_screen(epd, fonts):
 
                 if dots_h:
                     dot_r, dot_gap = 4, 18
-                    n = len(calendar_events)
+                    n = len(upcoming_calendar_events)
                     start_x = col1_x + max(0, (content_w - (n - 1) * dot_gap) / 2)
                     dot_y = filler_y0 + filler_h - 12
                     for i in range(n):

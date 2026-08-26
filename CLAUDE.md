@@ -303,6 +303,23 @@ they're never more than about a week away, so a weekday name is
 unambiguous without the full date) and the event title, pixel-wrapped the
 same way the news headline is.
 
+**Past events are filtered out at render time, not fetch time.**
+`render_screen()` builds `upcoming_calendar_events` by dropping anything
+in `calendar_events` whose parsed start time (`_parse_calendar_time()`,
+shared with `_format_calendar_time()`) is already earlier than the Pi's
+current local time, *before* deciding what to rotate through or whether
+to fall back to the faces. This can't happen at fetch time instead —
+`data_store.calendar_events` is only refreshed every 300s (see below),
+so an event that was still upcoming at the last poll can lapse well
+before the next one, and the display re-renders roughly every 60s
+regardless of whether a fetch just happened. Unlike a stale headline or
+a day-old space photo (which still read as valid content even when
+old), a calendar event carries its own built-in "is this still true"
+signal — its timestamp — so a stale snapshot (her Shortcut hasn't run in
+a while) degrades to fewer events, or the fallback faces once all three
+have passed, rather than rotating through events that have obviously
+already happened.
+
 There's no `GET /api/calendar-events` data source on the Pi's own
 initiative — the *source* of truth is her iPhone's Calendar app, which
 the companion app has no API access to. An iPhone Shortcuts automation
