@@ -230,6 +230,19 @@ HYDRATION_ALERT_HOURS = 4.0
 HYDRATION_WINDOW_START_HOUR = 9   # 9:00 AM
 HYDRATION_WINDOW_END_HOUR = 18    # 6:00 PM
 
+# --- AWAY MESSAGE (full-screen takeover) ---
+# A remote "I'm away" switch: while the companion app's /api/away-message
+# reports enabled, render_screen() skips every widget entirely and shows
+# just this one message, auto-sized as large as it can go while still
+# fitting the screen — see _fit_away_message_font()/draw_away_message().
+# AWAY_MESSAGE_MAX_LEN keeps the auto-fit from ever having to shrink below
+# AWAY_MESSAGE_MIN_FONT_SIZE to make an oversized message fit — see
+# CLAUDE.md for how this bound was measured (worst case: one long
+# unbreakable word, since spaces let the wrapper use more lines instead of
+# shrinking further).
+AWAY_MESSAGE_MAX_LEN = 60
+AWAY_MESSAGE_MIN_FONT_SIZE = 40
+
 PRINTER_CONF = {
     'IP': '192.168....',
     'SERIAL': '....',
@@ -521,13 +534,19 @@ class DataStore:
         # None — see fetch_nasa_apod_image(). Only populated while
         # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headline.
         self.nasa_apod = None
+        # A remote full-screen takeover: while enabled is True, render_screen()
+        # replaces every widget with just `message`, auto-sized to fill the
+        # screen — see fetch_away_message() and draw_away_message(). Defaults
+        # off, same safe-default convention as every other unwired widget —
+        # a fresh checkout (or a fetch failure) never hides the dashboard.
+        self.away_message = {'enabled': False, 'message': ''}
 
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
             'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0,
-            'nasa_apod': 0
+            'nasa_apod': 0, 'away_message': 0
         }
 
 
@@ -1380,6 +1399,32 @@ def _hydration_alert_active(last_logged_at):
     return (time.time() - baseline) >= HYDRATION_ALERT_HOURS * 3600
 
 
+def fetch_away_message():
+    """GET /api/away-message. Polled much more often than /api/widget-config
+    (see update_data_thread) since this is meant to take effect promptly —
+    a "back in 10" set right before stepping out shouldn't take minutes to
+    show up. message is hard-truncated to AWAY_MESSAGE_MAX_LEN regardless
+    of what the API sends, so a misbehaving companion app can never hand
+    draw_away_message() a string long enough to force it below
+    AWAY_MESSAGE_MIN_FONT_SIZE. A non-dict response, an unreachable
+    endpoint, or a missing config file all return None, which leaves
+    data_store.away_message at its last known value — same "don't blank a
+    working widget on one bad fetch" rule as every other fetch in this
+    file; in particular a network blip while she's away should keep
+    showing the away screen, not silently reveal the dashboard."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/away-message"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, dict):
+        return None
+    return {
+        'enabled': bool(data.get('enabled', False)),
+        'message': str(data.get('message') or '')[:AWAY_MESSAGE_MAX_LEN],
+    }
+
+
 def _load_news_api_key():
     """Reads {"api_key": ...} from NEWS_API_CONF's gitignored CONFIG_FILE.
     Missing file or missing key both return None, same "no config -> no-op"
@@ -1723,6 +1768,17 @@ def update_data_thread():
                     data_store.water = w_data
             data_store.last_update['water'] = now
 
+        # Polled every 15s — faster than every other companion-app fetch,
+        # since flipping this on is meant to take effect right away (a
+        # "back in 10" set on the way out the door shouldn't take minutes
+        # to show up), same reasoning as water's 20s poll just above.
+        if now - data_store.last_update['away_message'] > 15:
+            am_data = fetch_away_message()
+            if am_data is not None:
+                with data_store.lock:
+                    data_store.away_message = am_data
+            data_store.last_update['away_message'] = now
+
         # Companion app: todos want to feel reasonably fresh (120s), widget
         # config is more "check every so often" (600s) — see CLAUDE.md's
         # "one endpoint per resource" section for why these poll
@@ -1976,6 +2032,62 @@ def get_weather_icon(code, is_day=1):
     return "icon_sun"
 
 
+# Largest-first candidate sizes for the away-message auto-fit — checked in
+# this order so the first one whose wrapped text fits the safe box wins,
+# rather than growing a size up from the bottom (which would need the same
+# number of measurements anyway, just in the other direction).
+AWAY_MESSAGE_FONT_SIZES = list(range(160, AWAY_MESSAGE_MIN_FONT_SIZE - 1, -4))
+
+
+def _measure_away_lines(draw, lines, font):
+    """Real ink bbox per line, not a nominal font-size-derived estimate —
+    Aldrich's ascent/descent padding means a size-based line height draws
+    with a visible gap above the glyphs instead of true centring. Same
+    "measure the actual bbox, don't trust nominal offsets" approach as the
+    Tasks widget's completed-task strikethrough elsewhere in this file."""
+    gap = max(4, int(font.size * 0.3))
+    boxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+    heights = [b[3] - b[1] for b in boxes]
+    total_h = sum(heights) + gap * (len(lines) - 1)
+    return boxes, heights, gap, total_h
+
+
+def _fit_away_message_font(draw, message, max_w, max_h):
+    """Finds the largest Aldrich size from AWAY_MESSAGE_FONT_SIZES whose
+    word-wrapped rendering of `message` fits within max_w x max_h, so any
+    message within AWAY_MESSAGE_MAX_LEN characters displays as large as
+    the screen allows rather than at one fixed size regardless of length.
+    wrap_text() already hard-breaks a single word wider than max_w by
+    character (same helper the affirmation/news/task-title text uses), so
+    even a pathological no-spaces message stays within max_w at every
+    candidate size — only the height check can fail, and the smallest
+    size is returned unconditionally if even that doesn't fit, rather
+    than raising, since draw_away_message() must always draw something."""
+    font = lines = boxes = heights = gap = total_h = None
+    for size in AWAY_MESSAGE_FONT_SIZES:
+        font = ImageFont.truetype(os.path.join(FONT_DIR, 'Aldrich-Regular.ttc'), size)
+        lines = wrap_text(draw, message, font, max_w)
+        boxes, heights, gap, total_h = _measure_away_lines(draw, lines, font)
+        if total_h <= max_h:
+            break
+    return font, lines, boxes, heights, gap, total_h
+
+
+def draw_away_message(draw, screen_w, screen_h, message):
+    """Full-screen takeover: replaces every widget with one centred,
+    auto-sized message — see AWAY_MESSAGE_MAX_LEN/_fit_away_message_font()."""
+    margin_x, margin_y = 80, 60
+    max_w = screen_w - margin_x * 2
+    max_h = screen_h - margin_y * 2
+    font, lines, boxes, heights, gap, total_h = _fit_away_message_font(draw, message, max_w, max_h)
+    y = (screen_h - total_h) / 2
+    for line, box, h in zip(lines, boxes, heights):
+        lw = box[2] - box[0]
+        x = max(0, (screen_w - lw) / 2) - box[0]
+        draw.text((x, y - box[1]), line, font=font, fill=0)
+        y += h + gap
+
+
 def render_screen(epd, fonts):
     Himage = Image.new('1', (epd.width, epd.height), 255)
     draw = ImageDraw.Draw(Himage)
@@ -2000,8 +2112,15 @@ def render_screen(epd, fonts):
         news_headline = data_store.news_headline
         nasa_apod = data_store.nasa_apod
         water = data_store.water.copy()
+        away_message = data_store.away_message.copy()
     finally:
         data_store.lock.release()
+
+    if away_message.get('enabled') and away_message.get('message'):
+        # Full-screen takeover — every widget below is skipped entirely
+        # while this is active, not just hidden behind it.
+        draw_away_message(draw, epd.width, epd.height, away_message['message'])
+        return Himage
 
     col_w = epd.width // 3
 

@@ -630,6 +630,80 @@ unreachable endpoint, or a missing config file all return `None`, which
 leaves `data_store.water` at its last known value — same "don't blank a
 working widget on one bad fetch" rule as every other fetch in this file.
 
+### Away message fetch (`fetch_away_message()`)
+
+Polls `GET /api/away-message` every 15s — faster even than the hydration
+widget's 20s, since flipping this on is meant to take effect right away
+(a "back in 10" set on the way out the door shouldn't take minutes to
+show up). Returns `{"enabled": bool, "message": str}`; `message` is
+hard-truncated to `AWAY_MESSAGE_MAX_LEN` regardless of what the API
+sends, so a misbehaving companion app (or a bug in its own length check)
+can never hand `draw_away_message()` a string long enough to force the
+auto-fit below `AWAY_MESSAGE_MIN_FONT_SIZE` (see "Away message" below). A
+non-dict response, an unreachable endpoint, or a missing config file all
+return `None`, which leaves `data_store.away_message` at its last known
+value — same "don't blank a working widget on one bad fetch" rule as
+every other fetch in this file. In particular, that means a network blip
+*while she's away* keeps showing the away screen rather than silently
+reverting to the normal dashboard — the safer failure direction, since a
+missed "she's back" toggle just delays the dashboard reappearing by one
+poll, while a missed "she's away" fetch would expose the real dashboard
+(and whatever's on it) when the point was to hide it.
+
+## Away message (full-screen takeover)
+
+A remote switch, driven entirely by the companion app (see "Away message
+fetch" above) — no local `ENABLE_*` toggle, since the whole point is that
+she controls it from the app in the moment, not something set once at
+deploy time. `render_screen()` checks `data_store.away_message` right
+after its usual lock-and-copy block, before column 1 is drawn at all: if
+`enabled` is true and `message` is non-empty, it calls
+`draw_away_message()` and returns immediately, so every widget is
+genuinely skipped that redraw, not just drawn-over. Defaults to
+`{'enabled': False, 'message': ''}` in `DataStore.__init__` and on a
+missing config file, same safe-default convention as every other unwired
+widget — a fresh checkout never hides the dashboard.
+
+**`AWAY_MESSAGE_MAX_LEN` (60 characters)** exists so the auto-fit below
+never has to shrink a message down to an illegibly small size just to
+make it fit. The bound was chosen by testing the worst realistic case —
+one long unbreakable "word" with no spaces for the wrapper to break on
+(spaces let the wrapper add lines instead of shrinking the font further,
+so a sentence of the same length is never worse) — and confirming it
+still lands at a large, clearly-legible font well above
+`AWAY_MESSAGE_MIN_FONT_SIZE` (40px): 60 unbroken characters fits at 84px.
+`fetch_away_message()` enforces this length server-response-side (see
+above); the companion app's input field should also enforce it
+client-side with a live character counter, so she sees the limit while
+typing rather than discovering it's been silently cut off.
+
+**`draw_away_message()`/`_fit_away_message_font()`** implement the
+auto-sizing: starting from `AWAY_MESSAGE_FONT_SIZES` (160px down to
+`AWAY_MESSAGE_MIN_FONT_SIZE` in 4px steps), each candidate size
+word-wraps the message with the same `wrap_text()` helper the
+affirmation/news/task-title text uses elsewhere in this file — which
+already hard-breaks a single word wider than the safe width by character,
+so even a pathological no-spaces message stays within the horizontal
+margin at every candidate size. The first (largest) size whose wrapped
+lines fit within the vertical safe area wins; if even the smallest
+candidate doesn't fit vertically, it's used anyway rather than raising,
+since the widget must always draw something. This is a "shrink to fit"
+search, not a "minimise line count" one — a short phrase that doesn't
+fit the safe width in one line at the largest sizes wraps to two lines
+*at that same large size*, rather than dropping to a smaller size just to
+stay on one line, since a bigger two-line message reads better on a
+across-the-room e-ink display than a smaller single-line one.
+
+**Vertical/horizontal centring uses real ink bounding boxes
+(`draw.textbbox()`), not nominal font-size-derived line heights** —
+Aldrich's ascent/descent padding means a size-based estimate draws with a
+visible gap above the glyphs instead of true centring, the same "measure
+the actual bbox, don't trust nominal offsets" approach the Tasks widget's
+completed-task strikethrough already uses elsewhere in this file. Each
+line is centred independently, and lines are stacked with a
+size-proportional gap (`0.3 * font.size`) around their combined real
+height, then that whole block is centred vertically on the screen.
+
 ## Roadmap (not yet built — one session per item)
 
 These are planned follow-ups; each is its own scoped session. Keep the
