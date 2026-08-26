@@ -175,11 +175,16 @@ real tasks just leave empty checkbox rows rather than resizing the rows, so
 the layout doesn't jump around as the count changes day to day. Row height
 is computed from `TODO_MAX_TASKS` rather than hardcoded, so changing the
 constant needs no other edits. `data_store.todos` is a list of
-`{"title": str, "due": str | None, "completed": bool}` dicts —
-`TODO_PLACEHOLDER_TASKS` seeds it for local testing/preview; `fetch_todos_data()`
-(see above) replaces it at runtime. A completed task can still legitimately be
-among today's top N (e.g. shown done for the rest of the day), so the
-placeholder data deliberately mixes completed and not.
+`{"title": str, "due": str | None, "completed": bool}` dicts, or `None` —
+`None` specifically means "no successful fetch yet" (never tried, or the
+last attempt failed), distinct from `[]` (fetch succeeded, genuinely no
+tasks today); see "Placeholders" below for how the draw code tells them
+apart. `TODO_PLACEHOLDER_TASKS` is a manual-testing seed only (not a live
+default any more — see `DataStore.__init__`) for exercising the row
+layout locally; `fetch_todos_data()` populates the real value at runtime.
+A completed task can still legitimately be among today's top N (e.g.
+shown done for the rest of the day), so the placeholder data deliberately
+mixes completed and not.
 
 A completed task draws a filled checkbox (rather than the default outline)
 with a light checkmark cut into it via two white lines, plus a strikethrough
@@ -197,14 +202,20 @@ same helper, same reasoning. The due-time column budget (100px) is sized
 off measuring a real "HH:MM AM/PM" string (~94px at `fonts['20']`), not a
 round number — an untested guess here undercounted it once already.
 
-**Empty/fetch-failed placeholder**: when `data_store.todos` is empty
-(genuinely no tasks today, or the fetch hasn't populated it yet), the
-column shows a centred `icon_task` plus "No Tasks Today" instead of a grid
-of empty checkbox rows — same "icon plus centred message" shape as
-Spotify's "Nothing Playing" and the weather placeholder. Doesn't
-distinguish "no tasks" from "fetch failed", same as those two — a
-missing/dead fetch degrades to the same placeholder rather than a special
-error state.
+**Two distinct placeholders, not one.** `render_screen()` checks
+`todos is None` before `not todos`: a centred `icon_wifi` plus "Can't Reach
+Tasks" for `None` (no successful fetch yet), or a centred `icon_task` plus
+"No Tasks Today" for `[]` (fetch succeeded, list is genuinely empty) — same
+"icon plus centred message" shape as Spotify's "Nothing Playing" and the
+weather placeholder, just two variants instead of one. This is a
+deliberate exception to this file's usual "keep the last known value on a
+failed fetch" convention (see Conventions below): `update_data_thread`'s
+todos fetch overwrites `data_store.todos` with `fetch_todos_data()`'s
+result on *every* attempt, success or failure, rather than only on
+success. A stale task list — wrong due times, wrong completed
+checkboxes — is actively misleading in a way a stale weather reading or
+crypto price isn't, so for this widget an honest "can't connect" beats
+silently showing yesterday's data.
 
 **Partially-empty rows**: when there are fewer real tasks than
 `TODO_MAX_TASKS` (the common case), the leftover rows show a cheerful face

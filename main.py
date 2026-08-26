@@ -174,11 +174,15 @@ TODO_MAX_TASKS = 5
 # an empty outline repeated a few times. Picked per row via random.choice()
 # so a short list doesn't always show the same face in the same slot.
 TODO_EMPTY_ROW_ICONS = ["icon_face_smile", "icon_face_happy", "icon_face_laugh"]
-# Seed content for local testing/preview — the real GET /api/tasks/top
-# fetch (see fetch_todos_data()) replaces this at runtime. A realistic mix
-# of with/without a due time, and done/not-done, since "due" is optional
-# per task and completed tasks can still be among today's top N (e.g. shown
-# for the rest of the day as a done checkmark).
+# Manual-testing seed only — NOT used as a live default any more now that
+# GET /api/tasks/top is live (see fetch_todos_data()); data_store.todos
+# starts at None (see DataStore) so a real "no data yet"/"fetch failed"
+# state is never mistaken for this placeholder content. Set
+# data_store.todos = TODO_PLACEHOLDER_TASKS by hand when testing the row
+# layout locally. A realistic mix of with/without a due time, and
+# done/not-done, since "due" is optional per task and completed tasks can
+# still be among today's top N (e.g. shown for the rest of the day as a
+# done checkmark).
 TODO_PLACEHOLDER_TASKS = [
     {"title": "Finish quarterly report", "due": "2:00 PM", "completed": False},
     {"title": "Buy groceries", "due": None, "completed": True},
@@ -249,7 +253,8 @@ STRAVA_CONF = {
 # entered once by hand rather than obtained via a browser flow. Gitignored,
 # same as every other credential in this file — a fresh checkout has no
 # such file, which is what makes fetch_todos_data()/fetch_widget_config_data()
-# degrade to "leave data_store as-is" below rather than crashing.
+# return None (a no-op for widget_config; the Tasks widget's "can't
+# connect" placeholder for todos) rather than crashing.
 WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
@@ -432,7 +437,11 @@ class DataStore:
         self.crypto = {'btc': 0, 'eth': 0, 'btc_hist': [], 'eth_hist': []}
         self.ping = {'current': 0, 'history': deque(maxlen=50)}
         self.affirmation = random.choice(GREETING_FALLBACK_AFFIRMATIONS)
-        self.todos = list(TODO_PLACEHOLDER_TASKS)
+        # None means "no successful fetch yet" (either never tried, or the
+        # last attempt failed) — distinct from [] (fetch succeeded, she
+        # genuinely has no tasks today). The Tasks widget draws a different
+        # placeholder for each; see render_screen().
+        self.todos = None
         # last_logged_at is a Unix timestamp (seconds); None means "no log
         # seen yet", which always keeps the widget hidden — a safe default
         # until GET /api/water-status is wired in (see CLAUDE.md roadmap).
@@ -1531,11 +1540,14 @@ def update_data_thread():
         # config is more "check every so often" (600s) — see CLAUDE.md's
         # "one endpoint per resource" section for why these poll
         # independently rather than sharing one combined fetch/cadence.
+        # Unlike every other fetch in this file, a failure here overwrites
+        # data_store.todos (with None) rather than keeping the last known
+        # value — a stale task list (wrong due times, wrong completed
+        # state) is worse than an honest "can't reach the server" message,
+        # per the user's explicit call for this widget.
         if now - data_store.last_update['todos'] > 120:
-            todos = fetch_todos_data()
-            if todos is not None:
-                with data_store.lock:
-                    data_store.todos = todos
+            with data_store.lock:
+                data_store.todos = fetch_todos_data()
             data_store.last_update['todos'] = now
 
         if now - data_store.last_update['widget_config'] > 600:
@@ -1771,7 +1783,7 @@ def render_screen(epd, fonts):
         crypto = data_store.crypto.copy()
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
-        todos = data_store.todos.copy()
+        todos = data_store.todos.copy() if data_store.todos is not None else None
         water = data_store.water.copy()
     finally:
         data_store.lock.release()
@@ -1788,18 +1800,22 @@ def render_screen(epd, fonts):
         draw.text((col1_x + 45, 15), "TASKS OF THE DAY", font=fonts['28'], fill=0)
         draw.line((col1_x, 60, col1_x + content_w, 60), fill=0, width=2)
 
-        if not todos:
-            # Placeholder — no tasks today, or the fetch hasn't populated
-            # data_store.todos yet (fresh boot, or the companion app
-            # unreachable). Same "icon plus centred message" shape as
-            # Spotify's "Nothing Playing" and the weather placeholder, so an
-            # empty/failed fetch degrades gracefully instead of leaving the
-            # column as a grid of empty checkboxes with no explanation.
+        if todos is None or not todos:
+            # Two distinct placeholders, both "icon plus centred message"
+            # like Spotify's "Nothing Playing" and the weather placeholder:
+            # todos is None means the last fetch attempt failed (or none
+            # has completed yet) — an honest "can't connect" beats showing
+            # a stale or fake task list; [] means the fetch succeeded and
+            # she genuinely has nothing on today's list.
+            if todos is None:
+                icon_name, msg = "icon_wifi", "Can't Reach Tasks"
+            else:
+                icon_name, msg = "icon_task", "No Tasks Today"
+
             icon_size = 100
             icon_x = col1_x + max(0, (content_w - icon_size) / 2)
             icon_y = 220
-            draw_icon(draw, int(icon_x), icon_y, "icon_task", (icon_size, icon_size))
-            msg = "No Tasks Today"
+            draw_icon(draw, int(icon_x), icon_y, icon_name, (icon_size, icon_size))
             mw = text_width(draw, msg, fonts['28'])
             draw.text((col1_x + max(0, (content_w - mw) / 2), icon_y + icon_size + 30), msg, font=fonts['28'], fill=0)
 
