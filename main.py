@@ -154,11 +154,11 @@ GREETING_NAME = "Charlotte"
 # '35' (Aldrich-Regular.ttc); non-Latin ones use 'cjk_greeting', a small
 # bundled subset font (fnt/CJK-Greeting.ttf) since Aldrich has no CJK/kana
 # glyphs. See CLAUDE.md for how to add more non-Latin words.
-GREETING_INTL_CHANCE = 0.5
+GREETING_INTL_CHANCE = 0.7
 GREETING_ZH_HELLO = "嗨"
 GREETING_ZH_CHANCE = 0.5  # share of the international slot given to Chinese
 GREETING_INTL_HELLOS = [
-    ("Bonjour", '35'), ("Hola", '35'), ("Ciao", '35'), ("Hallo", '35'),
+    ("Bonjour", '35'), ("Hola", '35'), ("Hallo", '35'),
     ("Ola", '35'), ("Halo", '35'), ("Hei", '35'), ("こんにちは", 'cjk_greeting'),
     ("Czesc", '35'), ("Merhaba", '35'), ("Kumusta", '35'), ("Habari", '35'),
     ("Sawasdee", '35'), ("Namaste", '35'), ("Salut", '35'),
