@@ -458,6 +458,18 @@ def _redact_error(exc, url):
     return text
 
 
+def _log_unexpected_response(endpoint, data):
+    """Logged when a fetch gets a successful HTTP response (so
+    NetworkManager's own error logging in get_json() never fires) but the
+    JSON body isn't shaped the way this file expects — an object instead
+    of a list, an error payload, an empty dict, etc. Without this, that
+    case is indistinguishable in dashboard.log from a config file simply
+    not existing yet: both silently return None with nothing logged.
+    Bounded to 300 chars since a misbehaving endpoint could return
+    anything, including something huge."""
+    logging.error(f"Unexpected {endpoint} response: {data!r}"[:300])
+
+
 # --- ROBUST NETWORK MANAGER ---
 class NetworkManager:
     def __init__(self):
@@ -1335,6 +1347,7 @@ def fetch_todos_data():
     url = f"{conf['base_url'].rstrip('/')}/api/tasks/top"
     data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
     if not isinstance(data, list):
+        _log_unexpected_response("/api/tasks/top", data)
         return None
     return [
         {
@@ -1368,7 +1381,10 @@ def fetch_widget_config_data():
         return None
     url = f"{conf['base_url'].rstrip('/')}/api/widget-config"
     data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        _log_unexpected_response("/api/widget-config", data)
+        return None
+    return data
 
 
 def fetch_water_status():
@@ -1386,6 +1402,7 @@ def fetch_water_status():
     url = f"{conf['base_url'].rstrip('/')}/api/water-status"
     data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
     if not isinstance(data, dict):
+        _log_unexpected_response("/api/water-status", data)
         return None
 
     last_logged_at = None
@@ -1444,6 +1461,7 @@ def fetch_away_message():
     url = f"{conf['base_url'].rstrip('/')}/api/away-message"
     data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
     if not isinstance(data, dict):
+        _log_unexpected_response("/api/away-message", data)
         return None
     return {
         'enabled': bool(data.get('enabled', False)),
@@ -1589,6 +1607,10 @@ def fetch_news_headline():
     )
     data = net.get_json(url, timeout=10)
     if not isinstance(data, dict) or data.get('status') != 'ok':
+        # Unlike NASA's media_type check below, status != 'ok' here is a
+        # genuine NewsAPI-reported error (bad key, rate limited, etc.),
+        # not an expected content variation — worth logging.
+        _log_unexpected_response("newsapi top-headlines", data)
         return None
 
     titles = [
@@ -1633,7 +1655,12 @@ def fetch_nasa_apod_image():
         return None
     url = f"{API_ENDPOINTS['nasa_apod']}?api_key={api_key}"
     data = net.get_json(url, timeout=10)
-    if not isinstance(data, dict) or data.get('media_type') != 'image':
+    if not isinstance(data, dict):
+        _log_unexpected_response("nasa apod", data)
+        return None
+    if data.get('media_type') != 'image':
+        # A video day is expected, documented behaviour, not a failure —
+        # unlike the malformed-shape case above, not worth logging.
         return None
     img_url = data.get('url')
     if not img_url:

@@ -807,3 +807,15 @@ until asked:
   project chose), and `requests`/`urllib3` connection-failure exceptions
   often embed that same query string verbatim inside their own message —
   so redacting only the URL you explicitly log isn't enough on its own.
+- A response that arrives successfully (HTTP 200, valid JSON) but isn't
+  shaped the way a fetch function expects — wrapped in an object instead
+  of a bare list, an error payload, an empty dict — never reaches
+  `NetworkManager`'s own error logging, since nothing raised an
+  exception. Every companion-app/third-party fetch that checks the
+  response's shape (`isinstance(data, list)`, etc.) logs through
+  `_log_unexpected_response()` on a mismatch, for the same reason as the
+  point above: without it, that case is indistinguishable in
+  `dashboard.log` from a config file simply not existing yet. Exception:
+  a documented, expected content variation that isn't actually a failure
+  — e.g. NASA APOD publishing a video instead of a photo — stays silent,
+  same as before; only the genuinely-malformed-shape case logs.
