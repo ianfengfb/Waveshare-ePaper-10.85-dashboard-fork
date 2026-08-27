@@ -240,72 +240,160 @@ checkboxes — is actively misleading in a way a stale weather reading or
 crypto price isn't, so for this widget an honest "can't connect" beats
 silently showing yesterday's data.
 
-**The filler widget is a normal widget, not a leftover-space filler.**
-`displayed_count = min(len(todos), TODO_MAX_TASKS - 1)` always caps real
-task display one slot short of the full row count, so whichever of two
-sources `TODO_FILLER_WIDGET` (`"news"` | `"nasa"`, default `"news"`)
-selects always gets at least one row — even on a day with `TODO_MAX_TASKS`
-or more real tasks, which previously left it with zero space and made it
-vanish entirely. `TODO_FILLER_WIDGET` is a mode selector rather than two
-independent `ENABLE_*` flags, same reasoning as
-`EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: exactly one fills that space at a
-time. Local default for now, intended to eventually be set remotely via
-`/api/widget-config` the same way those two are — see roadmap. When the
-active source has nothing to show — fresh boot, missing config file, a
-fetch failure, or (NASA only) a day it publishes a video instead of a
-photo — it falls back to `TODO_EMPTY_ROW_ICONS`: a row of smile/happy/laugh
-faces (one picked at random per remaining slot via `random.choice()`),
-laid out side by side and centred in the filler block rather than stacked
-one per row, sized to use the filler block's full height (up to 64px)
-rather than pinned to a single row's ~77px band. The filler block's own
-height still grows to fill whatever space real tasks don't use — one row
-when there are `TODO_MAX_TASKS - 1` or more tasks, more than one when
-there are fewer — it's only the *minimum* that's now guaranteed, not a
-fixed size. `update_data_thread` only polls whichever source is currently
-active, never both.
+**The filler slot is a combined carousel, not a single leftover-space
+widget.** `displayed_count = min(len(todos), TODO_MAX_TASKS - 1)` always
+caps real task display one slot short of the full row count, so the
+filler carousel always gets at least one row — even on a day with
+`TODO_MAX_TASKS` or more real tasks, which previously left it with zero
+space and made it vanish entirely. `TODO_FILLER_WIDGET` (`"news"` |
+`"nasa"`, default `"news"`) is a mode selector, same reasoning as
+`EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: exactly one of the two occupies
+that half of the rotation at a time. Local default for now, intended to
+eventually be set remotely via `/api/widget-config` the same way those
+two are — see roadmap. Calendar events are deliberately *not* part of
+this selector — they always join the rotation whenever there are any
+upcoming, regardless of which of news/NASA is chosen (see "Combined
+carousel" below). `update_data_thread` only polls whichever of news/NASA
+is currently selected, but always polls calendar events unconditionally.
 
-**`"news"`** shows one headline from NewsAPI.org's `/v2/top-headlines`
-(`fetch_news_headline()`) — a small "IN THE NEWS" label plus the
-headline, pixel-wrapped across however many lines the filler block has
-room for (same `wrap_lines_limited()` truncation every other
-externally-sourced string in this file uses). `NEWS_COUNTRY`/
-`NEWS_CATEGORY` (`"au"`/`"business"`) query general Australian business
-news rather than a tax-specific keyword search — NewsAPI has no
+`render_screen()` builds one ordered `filler_slides` list —
+`[('news', headline), ...]` or `[('nasa', None)]` (whichever
+`TODO_FILLER_WIDGET` selects) followed by `[('calendar', event), ...]`
+for every upcoming event — as two contiguous blocks in rotation order,
+not interleaved. A single wall-clock-derived index
+(`int(time.time() // TODO_FILLER_ROTATE_SECONDS) % len(filler_slides)`)
+picks the current slide, the same "no state to persist, stays correct
+across a script restart" mechanism the old calendar-only rotation used.
+`TODO_FILLER_ROTATE_SECONDS` (60s, matched to `main()`'s own render
+cadence — a shorter value would just mean some redraws land in the same
+rotation bucket as the last, since the display can only change on an
+actual redraw) replaced the old separate `NEWS_ROTATE_SECONDS`/
+`CALENDAR_ROTATE_SECONDS` constants now that one rotation clock drives
+every slide type. `draw_rotation_dots()` draws the position-indicator dot
+row (filled = current position) across all three slide types, shown only
+when `len(filler_slides) > 1` — one slide (e.g. NASA with no calendar
+events upcoming) needs no "cycling through several things" cue and gets
+the block's full height instead.
+
+When `filler_slides` is empty — fresh boot, missing config file, a fetch
+failure on whichever of news/NASA is selected, (NASA only) a day it
+publishes a video instead of a photo, *and* no calendar events upcoming —
+it falls back to `TODO_EMPTY_ROW_ICONS`: a row of smile/happy/laugh faces
+(one picked at random per remaining slot via `random.choice()`), laid out
+side by side and centred in the filler block rather than stacked one per
+row, sized to use the filler block's full height (up to 64px) rather than
+pinned to a single row's ~77px band. Because calendar events always join
+the rotation, this fallback is rarer than it was when calendar was just a
+third pickable mode — it now only fires when *both* halves of the
+carousel are empty at once. The filler block's own height still grows to
+fill whatever space real tasks don't use — one row when there are
+`TODO_MAX_TASKS - 1` or more tasks, more than one when there are fewer —
+it's only the *minimum* that's now guaranteed, not a fixed size.
+
+**`"news"`** contributes her next `NEWS_FETCH_SIZE` (5) headlines from
+newsdata.io's `/api/1/latest` (`fetch_news_headlines()`) to the carousel,
+one slide per headline. Replaced NewsAPI.org (used earlier in this
+project) after it stopped returning usable results in testing.
+`NEWS_COUNTRY` (`"au"`) is the only query filter — newsdata.io has no
 city-level targeting (nothing closer to "Canberra" than the country
-code), and a keyword-only query like `q=tax OR ATO` would come up empty
-on plenty of days, which a country+category feed never does.
-`NEWS_PREFERRED_KEYWORDS` then re-ranks *within* that always-populated
-batch: `fetch_news_headline()` returns the first fetched headline
-containing one of those keywords, falling back to the plain top story if
-none match, so the query itself never narrows and risks emptiness — only
-the choice among an already-non-empty result does. Polled hourly
-(`ENABLE_TODO`-gated) — NewsAPI's free "Developer" plan delays articles
-by 24h anyway and caps at 100 requests/day, so anything faster buys
-nothing. `NEWS_API_CONF` holds a gitignored `{"api_key": ...}` file, same
-never-commit-a-secret pattern as every other credential here. **Note on
-that free plan**: NewsAPI's ToS restricts it to development/testing, not
-production or commercial use — a judgement call to run it on a personal,
-non-commercial dashboard like this one, but worth knowing if this
-project's use ever changed.
+code), and the confirmed-working test query didn't filter by category
+either, so this keeps it simple rather than guessing at a category value
+that might zero out results on a quiet day. `NEWS_PREFERRED_KEYWORDS`
+sorts the fetched batch so any headline containing one of those words
+rotates in first, rather than narrowing the query itself and risking an
+empty result on quiet news days — everything else keeps newsdata.io's
+own ordering. Polled every 4 hours (`ENABLE_TODO`-gated) — a handful of
+headlines don't need to feel real-time, and this also bounds how often
+the companion app gets a fresh batch (see below). `NEWS_API_CONF` holds
+a gitignored `{"api_key": ...}` file, same never-commit-a-secret pattern
+as every other credential here.
 
-**`"nasa"`** shows NASA's Astronomy Picture of the Day
-(`fetch_nasa_apod_image()`, `GET /planetary/apod`) as one photo spanning
-the whole filler block — not a copy per row — since APOD is often a
-busy starfield/nebula shot that needs real room to read as a picture
-once dithered to 1-bit rather than noise. Cover-fit via `ImageOps.fit()`
+**The `content` field is never used, on screen or off.** newsdata.io's
+free tier returns the literal string `"ONLY AVAILABLE IN PAID PLANS"`
+for `content` rather than omitting the field — `fetch_news_headlines()`
+doesn't even read it, using `description` (real free-tier text) instead
+wherever more than a title is needed, so that placeholder string can
+never end up displayed or stored anywhere by accident.
+
+**Every fetched batch is also pushed to the companion app**, via
+`post_news_articles()` (`POST /api/news-articles`, fire-and-forget, same
+pattern as `post_system_status()`) — each article's `title`, `link`,
+`description`, `source_name`, and `published_at` (newsdata.io's naive
+UTC `pubDate` string, reformatted to real ISO 8601 by
+`_format_newsdata_pub_date()`). The e-ink screen only ever shows a
+title, rotating through the 5; this lets her read past a headline on the
+companion app if she wants to, without needing the screen itself to
+show more than one line of text.
+
+**`"nasa"`** contributes NASA's Astronomy Picture of the Day
+(`fetch_nasa_apod_image()`, `GET /planetary/apod`) as a single slide —
+one photo, not a copy per row — since APOD is often a busy
+starfield/nebula shot that needs real room to read as a picture once
+dithered to 1-bit rather than noise. Cover-fit via `ImageOps.fit()`
 (crop to fill, not letterbox) and dithered the same way as Spotify's
 album art (`ImageEnhance.Contrast(...).enhance(3.0)` then
 `.convert("1", dither=Image.NONE)` — a hard threshold, not
 Floyd-Steinberg, for visual consistency with that widget). `NASA_APOD_CONF`
 holds a gitignored `{"api_key": ...}` file, same pattern as `NEWS_API_CONF`.
 Polled hourly — APOD changes at most once a day, so anything faster is
-unnecessary load.
+unnecessary load. Because it's a single slide sharing the carousel with
+however many calendar events are upcoming, its photo only shrinks to
+leave room for the dot row when `len(filler_slides) > 1` (i.e. at least
+one calendar event is also in the mix) — with no calendar events at all
+it's the sole slide and the photo still fills the block edge-to-edge,
+exactly as before this redesign.
 
-Unlike the Tasks fetch itself, a failed fetch on either source does
-*not* clear the last good result (see `update_data_thread`) — a
-slightly stale headline or a day-old space photo isn't misleading the
-way a stale task list is, so both follow the file's usual "keep the
-last known value" convention instead of the Tasks-specific exception.
+**Calendar events always join the carousel** — up to 3 upcoming iPhone
+calendar events, contributed as one slide each regardless of whether
+`TODO_FILLER_WIDGET` is `"news"` or `"nasa"`. Each event shows a small
+"UPCOMING" label plus a formatted time (`_format_calendar_time()`:
+`"Today 3:00 PM"` / `"Tomorrow 9:00 AM"` / `"Fri 10:00 AM"` for anything
+further out — with at most 3 events shown, they're never more than about
+a week away, so a weekday name is unambiguous without the full date) and
+the event title, pixel-wrapped the same way a news headline is.
+
+**Past events are filtered out at render time, not fetch time.**
+`render_screen()` builds `upcoming_calendar_events` by dropping anything
+in `calendar_events` whose parsed start time (`_parse_calendar_time()`,
+shared with `_format_calendar_time()`) is already earlier than the Pi's
+current local time, *before* deciding what to rotate through or whether
+to fall back to the faces. This can't happen at fetch time instead —
+`data_store.calendar_events` is only refreshed every 300s (see below),
+so an event that was still upcoming at the last poll can lapse well
+before the next one, and the display re-renders roughly every 60s
+regardless of whether a fetch just happened. Unlike a stale headline or
+a day-old space photo (which still read as valid content even when
+old), a calendar event carries its own built-in "is this still true"
+signal — its timestamp — so a stale snapshot (her Shortcut hasn't run in
+a while) degrades to fewer events, or the fallback faces once all three
+have passed, rather than rotating through events that have obviously
+already happened.
+
+There's no `GET /api/calendar-events` data source on the Pi's own
+initiative — the *source* of truth is her iPhone's Calendar app, which
+the companion app has no API access to. An iPhone Shortcuts automation
+(running on a schedule, e.g. hourly) reads her upcoming events with the
+"Find Calendar Events" action and `POST`s them to the companion app,
+which stores just the latest snapshot (trimmed to the 3 soonest,
+server-side, same "server does the slicing" precedent as
+`/api/tasks/top`). The Pi only ever polls that stored snapshot
+(`fetch_calendar_events()`) — same shared-secret auth
+(`waveshare_api_config.json`) as every other companion-app call, no
+separate credential needed. Polled every 300s — faster than news/NASA's
+hourly cadence, since "is this event starting soon" is more time-
+sensitive than a headline, even though the underlying data only actually
+changes whenever her Shortcut last ran, and it's polled *unconditionally*
+(not gated on `TODO_FILLER_WIDGET`, see above) since it always feeds the
+carousel regardless of which of news/NASA is selected. `events[:3]` in
+`fetch_calendar_events()` is a defensive cap in case the endpoint ever
+sends more than 3, since the dot-row math assumes it hasn't.
+
+Unlike the Tasks fetch itself, a failed fetch on any of the three
+sources (news, NASA, or calendar) does *not* clear the last good result
+(see `update_data_thread`) — a slightly stale headline, a day-old space
+photo, or a slightly stale event list isn't misleading the way a stale
+task list is, so all three follow the file's usual "keep the last known
+value" convention instead of the Tasks-specific exception.
 
 Distinct from the all-empty placeholder above, which replaces the whole
 column with one centred icon+message — this is the "some tasks done,

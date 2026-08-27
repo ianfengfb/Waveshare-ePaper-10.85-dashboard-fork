@@ -186,39 +186,66 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    the terminal. The script fetches and saves the tokens to `outlook_token.json`, and refreshes
    them automatically in the background from then on — no further logins needed.
 
-### Tasks widget filler: NewsAPI or NASA (pick one)
-The Tasks widget (`ENABLE_TODO`) always reserves at least one row for a filler widget — either a
-news headline or NASA's photo of the day, whichever `TODO_FILLER_WIDGET` in `main.py` names
-(`"news"` or `"nasa"`, defaults to `"news"`) — instead of a blank checkbox grid, even on a day with
-`TODO_MAX_TASKS` or more real tasks. Real tasks display up to `TODO_MAX_TASKS - 1` of them, one
-slot short of the full row count; on a lighter day, the filler grows to use whatever space the
-remaining tasks don't. Only one filler source is active at a time; you only need to set up the one
-you use.
+### Tasks widget filler: News or NASA, plus her calendar (always on)
+The Tasks widget (`ENABLE_TODO`) always reserves at least one row for a filler carousel — instead
+of a blank checkbox grid, even on a day with `TODO_MAX_TASKS` or more real tasks. Real tasks
+display up to `TODO_MAX_TASKS - 1` of them, one slot short of the full row count; on a lighter day,
+the filler grows to use whatever space the remaining tasks don't.
 
-#### NewsAPI (`TODO_FILLER_WIDGET = "news"`)
-Shows a single Australian business headline.
-1. Get a free API key from [newsapi.org](https://newsapi.org/register) (instant, no approval wait).
-   Note: NewsAPI's free "Developer" plan is contractually development/testing-only (not for
-   production or commercial use) per their terms of service, and delays articles by 24 hours —
-   a judgement call to run on a personal, non-commercial dashboard like this one.
+The carousel combines two things: whichever of News or NASA `TODO_FILLER_WIDGET` in `main.py`
+names (`"news"` or `"nasa"`, defaults to `"news"`) — only one of those two is active at a time, you
+only need to set up the one you use — **plus** her next up-to-3 upcoming calendar events, which
+always join the rotation regardless of that setting. It rotates through one slide at a time (a
+headline, the NASA photo, or one calendar event) every 60 seconds.
+
+#### News (`TODO_FILLER_WIDGET = "news"`)
+Contributes her next 5 Australian headlines to the carousel, one slide each. Uses
+[newsdata.io](https://newsdata.io/), not NewsAPI.org (used earlier in this project, dropped after it
+stopped returning usable results in testing).
+1. Get a free API key from [newsdata.io](https://newsdata.io/) (instant, no approval wait).
 2. Create `news_api_config.json` in the project root (gitignored, same as every other credential
    file here):
    ```json
    { "api_key": "your-key-here" }
    ```
-3. No further setup — `update_data_thread` starts polling it automatically once the file exists.
-   Without it (or on a fetch failure), the widget falls back to a cheerful face per empty row.
+3. No further setup — `update_data_thread` starts polling it automatically once the file exists
+   (every 4 hours). Without it (or on a fetch failure), those 5 slides just aren't offered — the
+   carousel still shows calendar events if there are any, and only falls back to a cheerful face
+   per empty row if there's nothing from either source. Each fetched batch of 5 is also pushed to
+   the companion app so she can read past a headline there — the e-ink screen only ever shows the
+   title.
 
 #### NASA Astronomy Picture of the Day (`TODO_FILLER_WIDGET = "nasa"`)
-Shows NASA's photo of the day, cropped to fill the filler widget's row(s).
+Contributes NASA's photo of the day to the carousel as a single slide, cropped to fill the filler
+block. When no calendar events are upcoming it's the only slide and fills the block edge-to-edge;
+when calendar events share the rotation, it shrinks slightly to leave room for the position dots.
 1. Get a free API key from [api.nasa.gov](https://api.nasa.gov/) (instant, no approval wait).
 2. Create `nasa_apod_config.json` in the project root (gitignored):
    ```json
    { "api_key": "your-key-here" }
    ```
-3. No further setup — same automatic polling as NewsAPI above. Without it, on a fetch failure, or
-   on a day NASA publishes a video instead of a photo, the widget falls back to a cheerful face
-   per empty row.
+3. No further setup — same automatic polling as News above. Without it, on a fetch failure, or on a
+   day NASA publishes a video instead of a photo, that slide just isn't offered — same fallback
+   behaviour as News above.
+
+#### Calendar (always on, not a `TODO_FILLER_WIDGET` option)
+Contributes her next up-to-3 upcoming iPhone calendar events to the carousel, one slide each,
+regardless of whether News or NASA is selected above. Unlike News/NASA, there's no third-party API
+key to configure — the source of truth is her iPhone's own Calendar app, which reaches the
+dashboard via an iPhone Shortcuts automation rather than a direct fetch:
+1. On her iPhone, open the **Shortcuts** app and create a new automation (e.g. hourly, or "when I
+   leave home") that:
+   - Runs **Find Calendar Events** (sorted soonest-first, limited to the next few).
+   - Builds a JSON array of `{"title": ..., "start_time": ...}` objects (an ISO 8601 timestamp with
+     UTC offset, e.g. `2026-08-27T15:00:00+10:00`) from the results.
+   - `POST`s that array to `https://YOUR-APP.pages.dev/api/calendar-events` with the same
+     `X-Api-Key` header/value already in `waveshare_api_config.json`.
+2. The companion app stores just the latest snapshot (trimmed to the 3 soonest events) — no
+   history, no separate database table to manage on the Pi's side.
+3. No further setup on the Pi — it polls that stored snapshot automatically once
+   `waveshare_api_config.json` exists (the same file the todos/water/widget-config endpoints already
+   use). Without it, on a fetch failure, or before her Shortcut has run for the first time, those
+   slides just aren't offered — same fallback behaviour as News/NASA above.
 
 ---
 

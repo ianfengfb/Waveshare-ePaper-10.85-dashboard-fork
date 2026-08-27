@@ -140,7 +140,7 @@ API_ENDPOINTS = {
     'outlook_token': 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     'outlook_messages': 'https://graph.microsoft.com/v1.0/me/messages',
     'affirmation': 'https://www.affirmations.dev',
-    'news_top_headlines': 'https://newsapi.org/v2/top-headlines',
+    'news_latest': 'https://newsdata.io/api/1/latest',
     'nasa_apod': 'https://api.nasa.gov/planetary/apod',
 }
 
@@ -301,35 +301,47 @@ WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
 
-# Which source fills the Tasks widget's leftover rows: "news" or "nasa".
-# A single mode selector rather than two independent ENABLE_* flags, same
-# reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly one occupies
-# that space at a time. Local default for now, intended to eventually be
-# set remotely via the companion app's /api/widget-config endpoint the
-# same way those two are — see CLAUDE.md roadmap.
+# Which of news or NASA shares the Tasks widget's filler slot: "news" or
+# "nasa". A mode selector rather than independent ENABLE_* flags, same
+# reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly one of the
+# two occupies that half of the rotation at a time. Local default for
+# now, intended to eventually be set remotely via the companion app's
+# /api/widget-config endpoint the same way those two are — see CLAUDE.md
+# roadmap. Calendar events are NOT part of this selector — they always
+# join the rotation whenever there are any upcoming, regardless of
+# whether news or NASA is chosen here (see "Left column: Tasks" in
+# CLAUDE.md for the combined-carousel design).
 TODO_FILLER_WIDGET = "news"
 
-# NewsAPI.org — free key from newsapi.org, entered once by hand into a
+# How long each slide in the Tasks widget's filler carousel stays on
+# screen before rotating to the next one — a "slide" being one news
+# headline, the single NASA photo, or one calendar event. Matched to
+# main()'s own ~60s render cadence — a shorter value here would just mean
+# some redraws land in the same rotation bucket as the last one (no
+# visible change) rather than smoothly speeding up the rotation, since
+# the display can only ever change on an actual redraw.
+TODO_FILLER_ROTATE_SECONDS = 60
+
+# newsdata.io — free key from newsdata.io, entered once by hand into a
 # gitignored config file, same "never commit a secret" pattern as every
 # other credential in this file (a single flat key, just one thing to
-# configure). NewsAPI's free "Developer" plan is contractually
-# development/testing-only (no production or commercial use per their
-# ToS) and delays articles by 24h — acceptable for this personal,
-# non-commercial dashboard, but worth knowing if this ever became a
-# public/commercial project.
+# configure). Replaced NewsAPI.org (used earlier in this project) after
+# it stopped returning usable results in testing; newsdata.io's free
+# tier has no such restriction found so far.
 NEWS_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'news_api_config.json')
 }
-# Country + category rather than a keyword search, since a tax
-# accountant's relevant reading is "Australian business/finance news"
-# generally, not literally tax-specific every single day — a keyword-only
-# query like "tax OR ATO" would come up empty on plenty of days. NewsAPI
-# has no city-level filtering (nothing more specific than country to
-# target "Canberra" with), so this is the closest available match.
+# Country only (no category) — matches the exact query confirmed working
+# in testing. newsdata.io has no city-level targeting (nothing closer to
+# "Canberra" than the country code) so this is the closest available
+# match for "news a tax accountant in Canberra would want".
 NEWS_COUNTRY = 'au'
-NEWS_CATEGORY = 'business'
+# How many headlines to fetch and join into the Tasks widget's filler
+# carousel — see "Left column: Tasks" in CLAUDE.md for the rotation
+# behaviour (shared with calendar events via TODO_FILLER_ROTATE_SECONDS).
+NEWS_FETCH_SIZE = 5
 # If any headline in the fetched batch contains one of these, it's
-# preferred over the plain top story — a lightweight nudge towards
+# sorted to the front of the rotation — a lightweight nudge towards
 # "actually relevant to a tax accountant" without narrowing the query
 # itself and risking an empty result on quiet news days.
 NEWS_PREFERRED_KEYWORDS = ['tax', 'ato', 'accountant', 'accounting', 'super', 'budget']
@@ -575,15 +587,31 @@ class DataStore:
             'progress_litres': 0.0, 'last_logged_at': None,
             'last_amount_litres': None, 'plants_grown_lifetime': 0
         }
-        # A single headline string that fills the Tasks widget's leftover
-        # rows, or None — see fetch_news_headline(). None falls back to
-        # TODO_EMPTY_ROW_ICONS. Only populated while TODO_FILLER_WIDGET ==
-        # "news".
-        self.news_headline = None
+        # Up to NEWS_FETCH_SIZE {"title": str, "link": str, "description":
+        # str, "source_name": str, "published_at": ISO8601 str | None}
+        # dicts that join the Tasks widget's filler carousel, or None —
+        # see fetch_news_headlines(). Only populated while
+        # TODO_FILLER_WIDGET == "news". The Pi only ever displays each
+        # article's title (rotating through all of them, interleaved with
+        # calendar_events below); the rest of each dict is pushed to the
+        # companion app via post_news_articles() so she can read past the
+        # headline there.
+        self.news_headlines = None
         # Greyscale PIL Image (NASA's Astronomy Picture of the Day), or
         # None — see fetch_nasa_apod_image(). Only populated while
-        # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headline.
+        # TODO_FILLER_WIDGET == "nasa".
         self.nasa_apod = None
+        # Up to 3 {"title": str, "start_time": ISO8601 str} dicts, soonest
+        # first, or None — see fetch_calendar_events(). Populated by an
+        # iPhone Shortcuts automation pushing her calendar to the
+        # companion app; the Pi only ever reads the latest snapshot.
+        # Unlike news_headlines/nasa_apod, this is NOT gated by
+        # TODO_FILLER_WIDGET — calendar events always join the filler
+        # carousel whenever there are any upcoming, regardless of
+        # whether news or NASA is the other half of the rotation (see
+        # CLAUDE.md). None (or no upcoming events) falls back to
+        # TODO_EMPTY_ROW_ICONS only when news/NASA also has nothing.
+        self.calendar_events = None
         # A remote full-screen takeover: while enabled is True, render_screen()
         # replaces every widget with just `message`, auto-sized to fill the
         # screen — see fetch_away_message() and draw_away_message(). Defaults
@@ -595,8 +623,9 @@ class DataStore:
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
-            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0,
-            'nasa_apod': 0, 'away_message': 0, 'system_status': 0
+            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headlines': 0,
+            'nasa_apod': 0, 'away_message': 0, 'system_status': 0,
+            'calendar_events': 0
         }
 
 
@@ -1606,45 +1635,84 @@ def _load_news_api_key():
         return None
 
 
-def fetch_news_headline():
-    """GET /v2/top-headlines?country=au&category=business. Returns a
-    single headline string, or None (missing config, network/HTTP
-    failure, or no usable articles in the response). NewsAPI has no
-    city-level targeting, so country+category (see NEWS_COUNTRY/
-    NEWS_CATEGORY above) is the closest available match for "news a tax
-    accountant in Canberra would want" — this then prefers whichever
-    fetched headline contains a NEWS_PREFERRED_KEYWORDS hit over the
-    plain top story, falling back to the top story if none match, rather
-    than narrowing the query itself and risking an empty result on a
-    quiet news day. Titles come back as "Headline - Publisher"; the
-    publisher suffix is left in place — it's useful context, not noise,
-    and the widget only shows one line anyway."""
+def _format_newsdata_pub_date(pub_date_str):
+    """newsdata.io's pubDate is a naive "YYYY-MM-DD HH:MM:SS" string,
+    always UTC per their docs (pubDateTZ is always "UTC", never a real
+    per-article offset) — reformat to a real ISO 8601 string with an
+    explicit UTC offset so the companion app doesn't have to guess the
+    timezone. Returns None on anything that doesn't parse, same
+    "degrade rather than crash" convention as every date parse in this
+    file."""
+    try:
+        dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def fetch_news_headlines():
+    """GET newsdata.io's /api/1/latest?country=au&size=NEWS_FETCH_SIZE.
+    Replaced NewsAPI.org (used earlier in this project) after it stopped
+    returning usable results in testing. Returns a list of up to
+    NEWS_FETCH_SIZE {"title", "link", "description", "source_name",
+    "published_at"} dicts, or None (missing config, network/HTTP
+    failure, or no usable articles). Articles whose title contains a
+    NEWS_PREFERRED_KEYWORDS hit are sorted to the front of the list —
+    same "nudge towards actually relevant, don't narrow the query and
+    risk emptiness" reasoning as before — everything else keeps
+    newsdata.io's own ordering. Deliberately excludes the `content`
+    field: newsdata.io's free tier returns the literal string "ONLY
+    AVAILABLE IN PAID PLANS" for it rather than omitting it, so treating
+    that as real article text would display/store that placeholder
+    verbatim. `description` is real free-tier text and is what gets
+    used instead. The full list (not just what's shown on screen) is
+    pushed to the companion app via post_news_articles() so she can read
+    past a headline if she wants to — the e-ink screen only ever shows
+    each article's title, rotating through them (see CLAUDE.md)."""
     api_key = _load_news_api_key()
     if not api_key:
         return None
-    url = (
-        f"{API_ENDPOINTS['news_top_headlines']}?country={NEWS_COUNTRY}"
-        f"&category={NEWS_CATEGORY}&pageSize=10&apiKey={api_key}"
-    )
+    url = f"{API_ENDPOINTS['news_latest']}?apikey={api_key}&country={NEWS_COUNTRY}&size={NEWS_FETCH_SIZE}"
     data = net.get_json(url, timeout=10)
-    if not isinstance(data, dict) or data.get('status') != 'ok':
-        # Unlike NASA's media_type check below, status != 'ok' here is a
-        # genuine NewsAPI-reported error (bad key, rate limited, etc.),
-        # not an expected content variation — worth logging.
-        _log_unexpected_response("newsapi top-headlines", data)
+    if not isinstance(data, dict) or data.get('status') != 'success':
+        # A genuine newsdata.io-reported error (bad key, rate limited,
+        # etc.), not an expected content variation — worth logging.
+        _log_unexpected_response("newsdata.io latest", data)
         return None
 
-    titles = [
-        a.get('title') for a in data.get('articles', [])
-        if isinstance(a, dict) and a.get('title') and a.get('title') != '[Removed]'
+    articles = [
+        {
+            'title': a['title'],
+            'link': a.get('link'),
+            'description': a.get('description'),
+            'source_name': a.get('source_name'),
+            'published_at': _format_newsdata_pub_date(a.get('pubDate')),
+        }
+        for a in data.get('results', [])
+        if isinstance(a, dict) and a.get('title')
     ]
-    if not titles:
+    if not articles:
         return None
 
-    for title in titles:
-        if any(kw in title.lower() for kw in NEWS_PREFERRED_KEYWORDS):
-            return title
-    return titles[0]
+    articles.sort(key=lambda a: not any(kw in a['title'].lower() for kw in NEWS_PREFERRED_KEYWORDS))
+    post_news_articles(articles)
+    return articles
+
+
+def post_news_articles(articles):
+    """POST /api/news-articles. Fire-and-forget, same pattern as
+    post_system_status() — no data_store write, since this is purely
+    outward: the companion app stores the full article list (title,
+    link, description, source, published time) so she can read past a
+    headline there, the e-ink screen never shows more than the title
+    itself. Silently no-ops without a config file, same convention as
+    every other companion-app call in this file."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return
+    url = f"{conf['base_url'].rstrip('/')}/api/news-articles"
+    headers = {'X-Api-Key': conf['api_key'], 'Content-Type': 'application/json'}
+    net.get_json(url, headers=headers, data=json.dumps(articles), method='POST')
 
 
 def _load_nasa_api_key():
@@ -1697,6 +1765,69 @@ def fetch_nasa_apod_image():
     # comfortably bigger than the Tasks widget's leftover area ever gets.
     img.thumbnail((600, 600), Image.LANCZOS)
     return img
+
+
+def fetch_calendar_events():
+    """GET /api/calendar-events. Populated by an iPhone Shortcuts
+    automation that periodically pushes her upcoming calendar events to
+    the companion app — the Pi only ever reads whatever snapshot is
+    currently stored there, same shared-secret auth as every other
+    companion-app call. The companion app already trims to the 3 soonest
+    events server-side, same "server does the slicing" precedent as
+    /api/tasks/top; events[:3] here is just a defensive cap in case it
+    ever sends more. A non-list response, an unreachable endpoint, or a
+    missing config file all return None, which leaves
+    data_store.calendar_events at its last known value — a slightly
+    stale event list isn't misleading the way a stale Tasks checklist is
+    (see fetch_todos_data()), so this follows the file's usual "keep the
+    last known value" convention rather than that exception."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/calendar-events"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, list):
+        _log_unexpected_response("/api/calendar-events", data)
+        return None
+    events = [
+        {'title': str(item['title']), 'start_time': str(item['start_time'])}
+        for item in data
+        if isinstance(item, dict) and item.get('title') and item.get('start_time')
+    ]
+    return events[:3]
+
+
+def _parse_calendar_time(iso_str):
+    """Parses an event's ISO 8601 start time (with UTC offset, from the
+    companion app) into a local, timezone-aware datetime, or None if it's
+    missing/malformed. Shared by _format_calendar_time() (display) and
+    render_screen()'s past-event filter (see CLAUDE.md) so both agree on
+    what a given timestamp actually means."""
+    try:
+        return datetime.fromisoformat(iso_str).astimezone()
+    except (ValueError, TypeError):
+        return None
+
+
+def _format_calendar_time(iso_str):
+    """Formats an event's start time relative to today: "Today 3:00 PM",
+    "Tomorrow 9:00 AM", or "Fri 10:00 AM" for anything further out — with
+    at most 3 events ever shown, they're never more than about a week
+    away, so a weekday name plus time is unambiguous without needing the
+    full date too. Compares against the Pi's own local clock/timezone,
+    same convention as the local-midnight calculation elsewhere in this
+    file — it trusts the Pi's system timezone to already be set
+    correctly."""
+    dt = _parse_calendar_time(iso_str)
+    if dt is None:
+        return ""
+    today = datetime.now().astimezone().date()
+    time_str = dt.strftime("%I:%M %p").lstrip("0")
+    if dt.date() == today:
+        return f"Today {time_str}"
+    elif dt.date() == today + timedelta(days=1):
+        return f"Tomorrow {time_str}"
+    return f"{dt.strftime('%a')} {time_str}"
 
 
 def update_data_thread():
@@ -1993,19 +2124,22 @@ def update_data_thread():
 
         # Only fetches whichever of news/NASA is the active
         # TODO_FILLER_WIDGET — no point polling both when just one fills
-        # the Tasks widget's leftover space at a time. Hourly is already
-        # far more often than needed for either (NewsAPI's free tier
-        # delays articles by 24h anyway; NASA's photo changes once a day).
-        # Only updates data_store on success, same "don't blank a working
-        # widget on one bad fetch" convention as most fetches in this file
-        # (unlike the Tasks fetch itself) — a slightly stale headline/photo
-        # isn't misleading the way a stale task list is.
-        if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headline'] > 3600:
-            headline = fetch_news_headline()
-            if headline is not None:
+        # half of the Tasks widget's filler carousel at a time. Every 4
+        # hours for news — a handful of headlines don't need to feel
+        # real-time, and this also bounds how often post_news_articles()
+        # pushes a fresh batch to the companion app. NASA's photo changes
+        # once a day, so hourly there is already far more often than
+        # needed. Only updates data_store on success, same "don't blank
+        # a working widget on one bad fetch" convention as most fetches
+        # in this file (unlike the Tasks fetch itself) — a slightly
+        # stale headline/photo isn't misleading the way a stale task
+        # list is.
+        if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headlines'] > 14400:
+            headlines = fetch_news_headlines()
+            if headlines is not None:
                 with data_store.lock:
-                    data_store.news_headline = headline
-            data_store.last_update['news_headline'] = now
+                    data_store.news_headlines = headlines
+            data_store.last_update['news_headlines'] = now
 
         if ENABLE_TODO and TODO_FILLER_WIDGET == "nasa" and now - data_store.last_update['nasa_apod'] > 3600:
             apod_img = fetch_nasa_apod_image()
@@ -2013,6 +2147,21 @@ def update_data_thread():
                 with data_store.lock:
                     data_store.nasa_apod = apod_img
             data_store.last_update['nasa_apod'] = now
+
+        # Unlike news/NASA above, NOT gated by TODO_FILLER_WIDGET —
+        # calendar events always join the filler carousel whenever
+        # there are any upcoming, regardless of which of news/NASA is
+        # the other half of the rotation (see CLAUDE.md). Polled every
+        # 300s, faster than news/NASA's cadence — "is this event
+        # starting soon" is time-sensitive, even though the underlying
+        # data on the companion app only changes whenever her iPhone
+        # Shortcut last ran.
+        if ENABLE_TODO and now - data_store.last_update['calendar_events'] > 300:
+            events = fetch_calendar_events()
+            if events is not None:
+                with data_store.lock:
+                    data_store.calendar_events = events
+            data_store.last_update['calendar_events'] = now
 
         first_fetch_pass_done.set()
         gc.collect()
@@ -2117,6 +2266,24 @@ def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
         draw.bitmap((x, y), icon, fill=255 if is_white else 0)
     else:
         draw.rectangle((x, y, x + size[0], y + size[1]), outline=255 if is_white else 0)
+
+
+def draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h, count, idx):
+    """Small dot row (filled = current position) pinned to the bottom of
+    a Tasks widget filler block, marking it as "cycling through several
+    things" rather than a single, seemingly-random item — shared by the
+    news and calendar fillers, both of which rotate through a short list
+    on a wall-clock timer. Callers should only call this when count > 1;
+    it doesn't guard that itself since a single dot would be meaningless."""
+    dot_r, dot_gap = 4, 18
+    start_x = col1_x + max(0, (content_w - (count - 1) * dot_gap) / 2)
+    dot_y = filler_y0 + filler_h - 12
+    for i in range(count):
+        cx = start_x + i * dot_gap
+        if i == idx:
+            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), fill=0)
+        else:
+            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), outline=0, width=1)
 
 
 # Used to space canopy leaves via a sunflower-seed (Fibonacci) packing —
@@ -2294,8 +2461,9 @@ def render_screen(epd, fonts):
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
         todos = data_store.todos.copy() if data_store.todos is not None else None
-        news_headline = data_store.news_headline
+        news_headlines = data_store.news_headlines.copy() if data_store.news_headlines is not None else None
         nasa_apod = data_store.nasa_apod
+        calendar_events = data_store.calendar_events.copy() if data_store.calendar_events is not None else None
         water = data_store.water.copy()
         away_message = data_store.away_message.copy()
     finally:
@@ -2406,43 +2574,112 @@ def render_screen(epd, fonts):
             filler_y0 = row_top + displayed_count * row_h
             filler_h = row_bottom - filler_y0
 
-            if TODO_FILLER_WIDGET == "news" and news_headline:
-                # One headline spanning the whole filler block, not one
-                # per row — "obviously only fits one" per the ask. A small
-                # label first so a lone sentence doesn't look like a stray
-                # fragment; the headline itself is pixel-wrapped since
-                # it's unpredictable external text, same reasoning as task
-                # titles/due times.
-                label_y = filler_y0 + 6
-                draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
+            # Unlike a headline or a photo, a calendar event carries its
+            # own "is this still valid" signal — its start time. Dropped
+            # here rather than at fetch time, since an event that was
+            # still upcoming at the last poll can lapse before the next
+            # one; this way a stale snapshot (her Shortcut hasn't run in a
+            # while) degrades to fewer events, or the fallback faces if
+            # all three have passed, instead of rotating through events
+            # that have obviously already happened.
+            upcoming_calendar_events = []
+            if calendar_events:
+                now_dt = datetime.now().astimezone()
+                for ev in calendar_events:
+                    parsed = _parse_calendar_time(ev['start_time'])
+                    if parsed is not None and parsed >= now_dt:
+                        upcoming_calendar_events.append(ev)
 
-                headline_font = fonts['24']
-                line_h = 30
-                max_lines = max(1, int((filler_h - 30) / line_h))
-                lines = wrap_lines_limited(draw, news_headline, headline_font, content_w, max_lines=max_lines)
-                text_h = len(lines) * line_h
-                text_y0 = label_y + 24 + max(0, (filler_h - 30 - text_h) / 2)
-                for li, line in enumerate(lines):
-                    lw = text_width(draw, line, headline_font)
-                    draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
-                              line, font=headline_font, fill=0)
-
+            # A single combined carousel rather than three mutually
+            # exclusive widgets: calendar events always join whenever
+            # there are any upcoming, and whichever of news/NASA is
+            # selected fills the rest — "News" then "Calendar" as two
+            # contiguous blocks in rotation order, not interleaved.
+            filler_slides = []
+            if TODO_FILLER_WIDGET == "news" and news_headlines:
+                filler_slides.extend(('news', h) for h in news_headlines)
             elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
-                # One photo spanning the whole filler block, not one copy
-                # per empty row — NASA's photo of the day is often a busy
-                # starfield/nebula shot, so it needs real room to read as
-                # a picture rather than noise once dithered down to 1-bit.
-                # Cover-fit (crop to fill, not letterbox) since a
-                # fully-bled photo reads better here than a smaller
-                # centred one on a blank margin.
-                fitted = ImageOps.fit(nasa_apod, (int(content_w), int(filler_h)), Image.LANCZOS)
-                fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
-                dithered = fitted.convert("1", dither=Image.NONE)
-                Himage.paste(dithered, (col1_x, int(filler_y0)))
+                filler_slides.append(('nasa', None))
+            filler_slides.extend(('calendar', e) for e in upcoming_calendar_events)
+
+            if filler_slides:
+                # Deterministic off the wall clock (no counter/state to
+                # maintain) — one TODO_FILLER_ROTATE_SECONDS-long slide at
+                # a time, cycling through news/NASA then calendar events
+                # in the order they were appended above.
+                idx = int(time.time() // TODO_FILLER_ROTATE_SECONDS) % len(filler_slides)
+                slide_type, slide_data = filler_slides[idx]
+
+                # A small dot row (filled = current position) so the
+                # rotation reads as "cycling through several things"
+                # rather than a single, seemingly-random item — only
+                # drawn (and only reserved space) when there's more than
+                # one slide total across both sources combined.
+                dots_h = 16 if len(filler_slides) > 1 else 0
+
+                if slide_type == "news":
+                    # A small label first so a lone sentence doesn't look
+                    # like a stray fragment; the headline itself is
+                    # pixel-wrapped since it's unpredictable external
+                    # text, same reasoning as task titles/due times.
+                    label_y = filler_y0 + 6
+                    draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
+
+                    headline_font = fonts['24']
+                    line_h = 30
+                    max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
+                    lines = wrap_lines_limited(draw, slide_data['title'], headline_font, content_w, max_lines=max_lines)
+                    text_h = len(lines) * line_h
+                    avail_h = filler_h - 30 - dots_h
+                    text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
+                    for li, line in enumerate(lines):
+                        lw = text_width(draw, line, headline_font)
+                        draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                                  line, font=headline_font, fill=0)
+
+                elif slide_type == "nasa":
+                    # One photo spanning the filler block — NASA's photo
+                    # of the day is often a busy starfield/nebula shot, so
+                    # it needs real room to read as a picture rather than
+                    # noise once dithered down to 1-bit. Cover-fit (crop
+                    # to fill, not letterbox) since a fully-bled photo
+                    # reads better here than a smaller centred one on a
+                    # blank margin. Shrunk by dots_h only when calendar
+                    # events are also in the rotation — otherwise (NASA is
+                    # the only slide) it fills the whole block as before.
+                    photo_h = filler_h - dots_h
+                    fitted = ImageOps.fit(nasa_apod, (int(content_w), int(photo_h)), Image.LANCZOS)
+                    fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
+                    dithered = fitted.convert("1", dither=Image.NONE)
+                    Himage.paste(dithered, (col1_x, int(filler_y0)))
+
+                elif slide_type == "calendar":
+                    event = slide_data
+                    label_y = filler_y0 + 6
+                    draw.text((col1_x, label_y), "UPCOMING", font=fonts['14'], fill=0)
+                    time_str = _format_calendar_time(event['start_time'])
+                    tw = text_width(draw, time_str, fonts['14'])
+                    draw.text((col1_x + content_w - tw, label_y), time_str, font=fonts['14'], fill=0)
+
+                    title_font = fonts['24']
+                    line_h = 30
+                    max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
+                    lines = wrap_lines_limited(draw, event['title'], title_font, content_w, max_lines=max_lines)
+                    text_h = len(lines) * line_h
+                    avail_h = filler_h - 30 - dots_h
+                    text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
+                    for li, line in enumerate(lines):
+                        lw = text_width(draw, line, title_font)
+                        draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                                  line, font=title_font, fill=0)
+
+                if dots_h:
+                    draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h, len(filler_slides), idx)
 
             else:
-                # Nothing to show (fresh boot, missing API key, a fetch
-                # failure, or — NASA only — today's APOD is a video) —
+                # Nothing to show from either source (fresh boot, missing
+                # API key/config, a fetch failure, no calendar events
+                # pushed yet, or — NASA only — today's APOD is a video) —
                 # fall back to a row of cheerful faces, one per remaining
                 # slot, laid out side by side and centred in the filler
                 # block rather than stacked one per row — bigger and more
