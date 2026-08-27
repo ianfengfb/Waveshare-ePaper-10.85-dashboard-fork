@@ -140,7 +140,7 @@ API_ENDPOINTS = {
     'outlook_token': 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     'outlook_messages': 'https://graph.microsoft.com/v1.0/me/messages',
     'affirmation': 'https://www.affirmations.dev',
-    'news_top_headlines': 'https://newsapi.org/v2/top-headlines',
+    'news_latest': 'https://newsdata.io/api/1/latest',
     'nasa_apod': 'https://api.nasa.gov/planetary/apod',
 }
 
@@ -317,27 +317,30 @@ TODO_FILLER_WIDGET = "news"
 # change on an actual redraw.
 CALENDAR_ROTATE_SECONDS = 60
 
-# NewsAPI.org — free key from newsapi.org, entered once by hand into a
+# newsdata.io — free key from newsdata.io, entered once by hand into a
 # gitignored config file, same "never commit a secret" pattern as every
 # other credential in this file (a single flat key, just one thing to
-# configure). NewsAPI's free "Developer" plan is contractually
-# development/testing-only (no production or commercial use per their
-# ToS) and delays articles by 24h — acceptable for this personal,
-# non-commercial dashboard, but worth knowing if this ever became a
-# public/commercial project.
+# configure). Replaced NewsAPI.org (used earlier in this project) after
+# it stopped returning usable results in testing; newsdata.io's free
+# tier has no such restriction found so far.
 NEWS_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'news_api_config.json')
 }
-# Country + category rather than a keyword search, since a tax
-# accountant's relevant reading is "Australian business/finance news"
-# generally, not literally tax-specific every single day — a keyword-only
-# query like "tax OR ATO" would come up empty on plenty of days. NewsAPI
-# has no city-level filtering (nothing more specific than country to
-# target "Canberra" with), so this is the closest available match.
+# Country only (no category) — matches the exact query confirmed working
+# in testing. newsdata.io has no city-level targeting (nothing closer to
+# "Canberra" than the country code) so this is the closest available
+# match for "news a tax accountant in Canberra would want".
 NEWS_COUNTRY = 'au'
-NEWS_CATEGORY = 'business'
+# How many headlines to fetch and rotate through in the Tasks widget's
+# filler — see "News" in CLAUDE.md for the rotation behaviour.
+NEWS_FETCH_SIZE = 5
+# How long each of the up-to-NEWS_FETCH_SIZE headlines stays on screen
+# before rotating to the next — same reasoning as CALENDAR_ROTATE_SECONDS
+# below: matched to main()'s own ~60s render cadence, since the display
+# can only ever change on an actual redraw.
+NEWS_ROTATE_SECONDS = 60
 # If any headline in the fetched batch contains one of these, it's
-# preferred over the plain top story — a lightweight nudge towards
+# sorted to the front of the rotation — a lightweight nudge towards
 # "actually relevant to a tax accountant" without narrowing the query
 # itself and risking an empty result on quiet news days.
 NEWS_PREFERRED_KEYWORDS = ['tax', 'ato', 'accountant', 'accounting', 'super', 'budget']
@@ -583,20 +586,24 @@ class DataStore:
             'progress_litres': 0.0, 'last_logged_at': None,
             'last_amount_litres': None, 'plants_grown_lifetime': 0
         }
-        # A single headline string that fills the Tasks widget's leftover
-        # rows, or None — see fetch_news_headline(). None falls back to
-        # TODO_EMPTY_ROW_ICONS. Only populated while TODO_FILLER_WIDGET ==
-        # "news".
-        self.news_headline = None
+        # Up to NEWS_FETCH_SIZE {"title": str, "link": str, "description":
+        # str, "source_name": str, "published_at": ISO8601 str | None}
+        # dicts that fill the Tasks widget's filler rows, or None — see
+        # fetch_news_headlines(). None falls back to TODO_EMPTY_ROW_ICONS.
+        # Only populated while TODO_FILLER_WIDGET == "news". The Pi only
+        # ever displays each article's title (rotating through all of
+        # them); the rest of each dict is pushed to the companion app via
+        # post_news_articles() so she can read past the headline there.
+        self.news_headlines = None
         # Greyscale PIL Image (NASA's Astronomy Picture of the Day), or
         # None — see fetch_nasa_apod_image(). Only populated while
-        # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headline.
+        # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headlines.
         self.nasa_apod = None
         # Up to 3 {"title": str, "start_time": ISO8601 str} dicts, soonest
         # first, or None — see fetch_calendar_events(). Populated by an
         # iPhone Shortcuts automation pushing her calendar to the
         # companion app; the Pi only ever reads the latest snapshot. None
-        # falls back to TODO_EMPTY_ROW_ICONS, same as news_headline/
+        # falls back to TODO_EMPTY_ROW_ICONS, same as news_headlines/
         # nasa_apod. Only populated while TODO_FILLER_WIDGET == "calendar".
         self.calendar_events = None
         # A remote full-screen takeover: while enabled is True, render_screen()
@@ -610,7 +617,7 @@ class DataStore:
             'weather': 0, 'strava': 0, 'printer': 0, 'email': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
-            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headline': 0,
+            'todos': 0, 'widget_config': 0, 'water': 0, 'news_headlines': 0,
             'nasa_apod': 0, 'away_message': 0, 'system_status': 0,
             'calendar_events': 0
         }
@@ -1622,45 +1629,84 @@ def _load_news_api_key():
         return None
 
 
-def fetch_news_headline():
-    """GET /v2/top-headlines?country=au&category=business. Returns a
-    single headline string, or None (missing config, network/HTTP
-    failure, or no usable articles in the response). NewsAPI has no
-    city-level targeting, so country+category (see NEWS_COUNTRY/
-    NEWS_CATEGORY above) is the closest available match for "news a tax
-    accountant in Canberra would want" — this then prefers whichever
-    fetched headline contains a NEWS_PREFERRED_KEYWORDS hit over the
-    plain top story, falling back to the top story if none match, rather
-    than narrowing the query itself and risking an empty result on a
-    quiet news day. Titles come back as "Headline - Publisher"; the
-    publisher suffix is left in place — it's useful context, not noise,
-    and the widget only shows one line anyway."""
+def _format_newsdata_pub_date(pub_date_str):
+    """newsdata.io's pubDate is a naive "YYYY-MM-DD HH:MM:SS" string,
+    always UTC per their docs (pubDateTZ is always "UTC", never a real
+    per-article offset) — reformat to a real ISO 8601 string with an
+    explicit UTC offset so the companion app doesn't have to guess the
+    timezone. Returns None on anything that doesn't parse, same
+    "degrade rather than crash" convention as every date parse in this
+    file."""
+    try:
+        dt = datetime.strptime(pub_date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def fetch_news_headlines():
+    """GET newsdata.io's /api/1/latest?country=au&size=NEWS_FETCH_SIZE.
+    Replaced NewsAPI.org (used earlier in this project) after it stopped
+    returning usable results in testing. Returns a list of up to
+    NEWS_FETCH_SIZE {"title", "link", "description", "source_name",
+    "published_at"} dicts, or None (missing config, network/HTTP
+    failure, or no usable articles). Articles whose title contains a
+    NEWS_PREFERRED_KEYWORDS hit are sorted to the front of the list —
+    same "nudge towards actually relevant, don't narrow the query and
+    risk emptiness" reasoning as before — everything else keeps
+    newsdata.io's own ordering. Deliberately excludes the `content`
+    field: newsdata.io's free tier returns the literal string "ONLY
+    AVAILABLE IN PAID PLANS" for it rather than omitting it, so treating
+    that as real article text would display/store that placeholder
+    verbatim. `description` is real free-tier text and is what gets
+    used instead. The full list (not just what's shown on screen) is
+    pushed to the companion app via post_news_articles() so she can read
+    past a headline if she wants to — the e-ink screen only ever shows
+    each article's title, rotating through them (see CLAUDE.md)."""
     api_key = _load_news_api_key()
     if not api_key:
         return None
-    url = (
-        f"{API_ENDPOINTS['news_top_headlines']}?country={NEWS_COUNTRY}"
-        f"&category={NEWS_CATEGORY}&pageSize=10&apiKey={api_key}"
-    )
+    url = f"{API_ENDPOINTS['news_latest']}?apikey={api_key}&country={NEWS_COUNTRY}&size={NEWS_FETCH_SIZE}"
     data = net.get_json(url, timeout=10)
-    if not isinstance(data, dict) or data.get('status') != 'ok':
-        # Unlike NASA's media_type check below, status != 'ok' here is a
-        # genuine NewsAPI-reported error (bad key, rate limited, etc.),
-        # not an expected content variation — worth logging.
-        _log_unexpected_response("newsapi top-headlines", data)
+    if not isinstance(data, dict) or data.get('status') != 'success':
+        # A genuine newsdata.io-reported error (bad key, rate limited,
+        # etc.), not an expected content variation — worth logging.
+        _log_unexpected_response("newsdata.io latest", data)
         return None
 
-    titles = [
-        a.get('title') for a in data.get('articles', [])
-        if isinstance(a, dict) and a.get('title') and a.get('title') != '[Removed]'
+    articles = [
+        {
+            'title': a['title'],
+            'link': a.get('link'),
+            'description': a.get('description'),
+            'source_name': a.get('source_name'),
+            'published_at': _format_newsdata_pub_date(a.get('pubDate')),
+        }
+        for a in data.get('results', [])
+        if isinstance(a, dict) and a.get('title')
     ]
-    if not titles:
+    if not articles:
         return None
 
-    for title in titles:
-        if any(kw in title.lower() for kw in NEWS_PREFERRED_KEYWORDS):
-            return title
-    return titles[0]
+    articles.sort(key=lambda a: not any(kw in a['title'].lower() for kw in NEWS_PREFERRED_KEYWORDS))
+    post_news_articles(articles)
+    return articles
+
+
+def post_news_articles(articles):
+    """POST /api/news-articles. Fire-and-forget, same pattern as
+    post_system_status() — no data_store write, since this is purely
+    outward: the companion app stores the full article list (title,
+    link, description, source, published time) so she can read past a
+    headline there, the e-ink screen never shows more than the title
+    itself. Silently no-ops without a config file, same convention as
+    every other companion-app call in this file."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return
+    url = f"{conf['base_url'].rstrip('/')}/api/news-articles"
+    headers = {'X-Api-Key': conf['api_key'], 'Content-Type': 'application/json'}
+    net.get_json(url, headers=headers, data=json.dumps(articles), method='POST')
 
 
 def _load_nasa_api_key():
@@ -2072,20 +2118,22 @@ def update_data_thread():
 
         # Only fetches whichever of news/NASA/calendar is the active
         # TODO_FILLER_WIDGET — no point polling all three when just one
-        # fills the Tasks widget's filler space at a time. Hourly is
-        # already far more often than needed for news/NASA (NewsAPI's
-        # free tier delays articles by 24h anyway; NASA's photo changes
-        # once a day). Only updates data_store on success, same "don't
-        # blank a working widget on one bad fetch" convention as most
-        # fetches in this file (unlike the Tasks fetch itself) — a
-        # slightly stale headline/photo/event list isn't misleading the
-        # way a stale task list is.
-        if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headline'] > 3600:
-            headline = fetch_news_headline()
-            if headline is not None:
+        # fills the Tasks widget's filler space at a time. Every 4 hours
+        # for news — a handful of headlines don't need to feel real-time,
+        # and this also bounds how often post_news_articles() pushes a
+        # fresh batch to the companion app. NASA's photo changes once a
+        # day, so hourly there is already far more often than needed.
+        # Only updates data_store on success, same "don't blank a working
+        # widget on one bad fetch" convention as most fetches in this
+        # file (unlike the Tasks fetch itself) — a slightly stale
+        # headline/photo/event list isn't misleading the way a stale
+        # task list is.
+        if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headlines'] > 14400:
+            headlines = fetch_news_headlines()
+            if headlines is not None:
                 with data_store.lock:
-                    data_store.news_headline = headline
-            data_store.last_update['news_headline'] = now
+                    data_store.news_headlines = headlines
+            data_store.last_update['news_headlines'] = now
 
         if ENABLE_TODO and TODO_FILLER_WIDGET == "nasa" and now - data_store.last_update['nasa_apod'] > 3600:
             apod_img = fetch_nasa_apod_image()
@@ -2208,6 +2256,24 @@ def draw_icon(draw, x, y, name, size=(40, 40), is_white=False):
         draw.bitmap((x, y), icon, fill=255 if is_white else 0)
     else:
         draw.rectangle((x, y, x + size[0], y + size[1]), outline=255 if is_white else 0)
+
+
+def draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h, count, idx):
+    """Small dot row (filled = current position) pinned to the bottom of
+    a Tasks widget filler block, marking it as "cycling through several
+    things" rather than a single, seemingly-random item — shared by the
+    news and calendar fillers, both of which rotate through a short list
+    on a wall-clock timer. Callers should only call this when count > 1;
+    it doesn't guard that itself since a single dot would be meaningless."""
+    dot_r, dot_gap = 4, 18
+    start_x = col1_x + max(0, (content_w - (count - 1) * dot_gap) / 2)
+    dot_y = filler_y0 + filler_h - 12
+    for i in range(count):
+        cx = start_x + i * dot_gap
+        if i == idx:
+            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), fill=0)
+        else:
+            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), outline=0, width=1)
 
 
 # Used to space canopy leaves via a sunflower-seed (Fibonacci) packing —
@@ -2385,7 +2451,7 @@ def render_screen(epd, fonts):
         ping = data_store.ping.copy()
         affirmation = data_store.affirmation
         todos = data_store.todos.copy() if data_store.todos is not None else None
-        news_headline = data_store.news_headline
+        news_headlines = data_store.news_headlines.copy() if data_store.news_headlines is not None else None
         nasa_apod = data_store.nasa_apod
         calendar_events = data_store.calendar_events.copy() if data_store.calendar_events is not None else None
         water = data_store.water.copy()
@@ -2514,26 +2580,40 @@ def render_screen(epd, fonts):
                     if parsed is not None and parsed >= now_dt:
                         upcoming_calendar_events.append(ev)
 
-            if TODO_FILLER_WIDGET == "news" and news_headline:
-                # One headline spanning the whole filler block, not one
-                # per row — "obviously only fits one" per the ask. A small
-                # label first so a lone sentence doesn't look like a stray
-                # fragment; the headline itself is pixel-wrapped since
-                # it's unpredictable external text, same reasoning as task
-                # titles/due times.
+            if TODO_FILLER_WIDGET == "news" and news_headlines:
+                # One headline at a time, rotating through up to
+                # NEWS_FETCH_SIZE on a NEWS_ROTATE_SECONDS cycle
+                # (deterministic off the wall clock — no counter/state to
+                # maintain), same rotation approach as the calendar
+                # filler below. A small label first so a lone sentence
+                # doesn't look like a stray fragment; the headline itself
+                # is pixel-wrapped since it's unpredictable external
+                # text, same reasoning as task titles/due times.
+                idx = int(time.time() // NEWS_ROTATE_SECONDS) % len(news_headlines)
+                headline = news_headlines[idx]['title']
+
                 label_y = filler_y0 + 6
                 draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
 
+                # Same dot-row treatment as the calendar filler — only
+                # drawn when there's more than one headline to cycle
+                # through.
+                dots_h = 16 if len(news_headlines) > 1 else 0
+
                 headline_font = fonts['24']
                 line_h = 30
-                max_lines = max(1, int((filler_h - 30) / line_h))
-                lines = wrap_lines_limited(draw, news_headline, headline_font, content_w, max_lines=max_lines)
+                max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
+                lines = wrap_lines_limited(draw, headline, headline_font, content_w, max_lines=max_lines)
                 text_h = len(lines) * line_h
-                text_y0 = label_y + 24 + max(0, (filler_h - 30 - text_h) / 2)
+                avail_h = filler_h - 30 - dots_h
+                text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
                 for li, line in enumerate(lines):
                     lw = text_width(draw, line, headline_font)
                     draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
                               line, font=headline_font, fill=0)
+
+                if dots_h:
+                    draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h, len(news_headlines), idx)
 
             elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
                 # One photo spanning the whole filler block, not one copy
@@ -2582,16 +2662,8 @@ def render_screen(epd, fonts):
                               line, font=title_font, fill=0)
 
                 if dots_h:
-                    dot_r, dot_gap = 4, 18
-                    n = len(upcoming_calendar_events)
-                    start_x = col1_x + max(0, (content_w - (n - 1) * dot_gap) / 2)
-                    dot_y = filler_y0 + filler_h - 12
-                    for i in range(n):
-                        cx = start_x + i * dot_gap
-                        if i == idx:
-                            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), fill=0)
-                        else:
-                            draw.ellipse((cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r), outline=0, width=1)
+                    draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h,
+                                       len(upcoming_calendar_events), idx)
 
             else:
                 # Nothing to show (fresh boot, missing API key/config, a

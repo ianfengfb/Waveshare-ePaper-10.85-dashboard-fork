@@ -195,19 +195,20 @@ tasks display up to `TODO_MAX_TASKS - 1` of them, one slot short of the full row
 lighter day, the filler grows to use whatever space the remaining tasks don't. Only one filler
 source is active at a time; you only need to set up the one you use.
 
-#### NewsAPI (`TODO_FILLER_WIDGET = "news"`)
-Shows a single Australian business headline.
-1. Get a free API key from [newsapi.org](https://newsapi.org/register) (instant, no approval wait).
-   Note: NewsAPI's free "Developer" plan is contractually development/testing-only (not for
-   production or commercial use) per their terms of service, and delays articles by 24 hours —
-   a judgement call to run on a personal, non-commercial dashboard like this one.
+#### News (`TODO_FILLER_WIDGET = "news"`)
+Shows her next 5 Australian headlines, rotating one at a time every 60 seconds. Uses
+[newsdata.io](https://newsdata.io/), not NewsAPI.org (used earlier in this project, dropped after it
+stopped returning usable results in testing).
+1. Get a free API key from [newsdata.io](https://newsdata.io/) (instant, no approval wait).
 2. Create `news_api_config.json` in the project root (gitignored, same as every other credential
    file here):
    ```json
    { "api_key": "your-key-here" }
    ```
-3. No further setup — `update_data_thread` starts polling it automatically once the file exists.
-   Without it (or on a fetch failure), the widget falls back to a cheerful face per empty row.
+3. No further setup — `update_data_thread` starts polling it automatically once the file exists
+   (every 4 hours). Without it (or on a fetch failure), the widget falls back to a cheerful face
+   per empty row. Each fetched batch of 5 is also pushed to the companion app so she can read past
+   a headline there — the e-ink screen only ever shows the title.
 
 #### NASA Astronomy Picture of the Day (`TODO_FILLER_WIDGET = "nasa"`)
 Shows NASA's photo of the day, cropped to fill the filler widget's row(s).
@@ -221,7 +222,7 @@ Shows NASA's photo of the day, cropped to fill the filler widget's row(s).
    per empty row.
 
 #### Calendar (`TODO_FILLER_WIDGET = "calendar"`)
-Shows her next up-to-3 upcoming iPhone calendar events, rotating one at a time. Unlike NewsAPI/NASA,
+Shows her next up-to-3 upcoming iPhone calendar events, rotating one at a time. Unlike News/NASA,
 there's no third-party API key to configure — the source of truth is her iPhone's own Calendar app,
 which reaches the dashboard via an iPhone Shortcuts automation rather than a direct fetch:
 1. On her iPhone, open the **Shortcuts** app and create a new automation (e.g. hourly, or "when I

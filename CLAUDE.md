@@ -265,29 +265,43 @@ it's only the *minimum* that's now guaranteed, not a fixed size.
 `update_data_thread` only polls whichever source is currently active,
 never more than one.
 
-**`"news"`** shows one headline from NewsAPI.org's `/v2/top-headlines`
-(`fetch_news_headline()`) — a small "IN THE NEWS" label plus the
-headline, pixel-wrapped across however many lines the filler block has
-room for (same `wrap_lines_limited()` truncation every other
-externally-sourced string in this file uses). `NEWS_COUNTRY`/
-`NEWS_CATEGORY` (`"au"`/`"business"`) query general Australian business
-news rather than a tax-specific keyword search — NewsAPI has no
+**`"news"`** shows her next `NEWS_FETCH_SIZE` (5) headlines from
+newsdata.io's `/api/1/latest` (`fetch_news_headlines()`), one at a time,
+rotating every `NEWS_ROTATE_SECONDS` (60s) — same rotation mechanism as
+the calendar filler below (wall-clock-derived index, no state to
+persist), and the two share the same `draw_rotation_dots()` helper for
+the position-indicator dot row. Replaced NewsAPI.org (used earlier in
+this project) after it stopped returning usable results in testing.
+`NEWS_COUNTRY` (`"au"`) is the only query filter — newsdata.io has no
 city-level targeting (nothing closer to "Canberra" than the country
-code), and a keyword-only query like `q=tax OR ATO` would come up empty
-on plenty of days, which a country+category feed never does.
-`NEWS_PREFERRED_KEYWORDS` then re-ranks *within* that always-populated
-batch: `fetch_news_headline()` returns the first fetched headline
-containing one of those keywords, falling back to the plain top story if
-none match, so the query itself never narrows and risks emptiness — only
-the choice among an already-non-empty result does. Polled hourly
-(`ENABLE_TODO`-gated) — NewsAPI's free "Developer" plan delays articles
-by 24h anyway and caps at 100 requests/day, so anything faster buys
-nothing. `NEWS_API_CONF` holds a gitignored `{"api_key": ...}` file, same
-never-commit-a-secret pattern as every other credential here. **Note on
-that free plan**: NewsAPI's ToS restricts it to development/testing, not
-production or commercial use — a judgement call to run it on a personal,
-non-commercial dashboard like this one, but worth knowing if this
-project's use ever changed.
+code), and the confirmed-working test query didn't filter by category
+either, so this keeps it simple rather than guessing at a category value
+that might zero out results on a quiet day. `NEWS_PREFERRED_KEYWORDS`
+sorts the fetched batch so any headline containing one of those words
+rotates in first, rather than narrowing the query itself and risking an
+empty result on quiet news days — everything else keeps newsdata.io's
+own ordering. Polled every 4 hours (`ENABLE_TODO`-gated) — a handful of
+headlines don't need to feel real-time, and this also bounds how often
+the companion app gets a fresh batch (see below). `NEWS_API_CONF` holds
+a gitignored `{"api_key": ...}` file, same never-commit-a-secret pattern
+as every other credential here.
+
+**The `content` field is never used, on screen or off.** newsdata.io's
+free tier returns the literal string `"ONLY AVAILABLE IN PAID PLANS"`
+for `content` rather than omitting the field — `fetch_news_headlines()`
+doesn't even read it, using `description` (real free-tier text) instead
+wherever more than a title is needed, so that placeholder string can
+never end up displayed or stored anywhere by accident.
+
+**Every fetched batch is also pushed to the companion app**, via
+`post_news_articles()` (`POST /api/news-articles`, fire-and-forget, same
+pattern as `post_system_status()`) — each article's `title`, `link`,
+`description`, `source_name`, and `published_at` (newsdata.io's naive
+UTC `pubDate` string, reformatted to real ISO 8601 by
+`_format_newsdata_pub_date()`). The e-ink screen only ever shows a
+title, rotating through the 5; this lets her read past a headline on the
+companion app if she wants to, without needing the screen itself to
+show more than one line of text.
 
 **`"nasa"`** shows NASA's Astronomy Picture of the Day
 (`fetch_nasa_apod_image()`, `GET /planetary/apod`) as one photo spanning
