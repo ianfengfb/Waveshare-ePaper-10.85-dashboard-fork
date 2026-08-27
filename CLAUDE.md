@@ -187,11 +187,24 @@ Ping/Roborock/Antigravity/Codex all at once rather than swapping just one of
 the three stacked slots — it's a whole-column takeover, same shape as
 `MIDDLE_COLUMN_WIDGET` but for three slots instead of one.
 
-`TODO_MAX_TASKS` (currently 5) always reserves that many row slots — fewer
-real tasks just leave empty checkbox rows rather than resizing the rows, so
-the layout doesn't jump around as the count changes day to day. Row height
-is computed from `TODO_MAX_TASKS` rather than hardcoded, so changing the
-constant needs no other edits. `data_store.todos` is a list of
+`TODO_TASKS_PER_PAGE` (currently 3) is a fixed page size, not a "reserve at
+least this many rows" minimum — the widget always shows exactly this many
+rows, regardless of how many real tasks come back. Fewer real tasks than
+that just leave the remaining rows blank (no checkbox, no title) rather
+than resizing the grid around them; more real tasks page through
+`TODO_TASKS_PER_PAGE` at a time (see "Task pagination" below) rather than
+growing the grid to fit them all. This is what makes both this widget's
+height *and* the filler carousel's height below it fixed, predictable
+blocks instead of the two trading space back and forth as the task count
+changes day to day — "controllable space" for each, not one growing at the
+other's expense. Row height itself is still computed off a fixed 5-row
+reference (`row_h = (row_bottom - row_top) / 5`) independent of
+`TODO_TASKS_PER_PAGE` — that reference exists purely so the
+checkbox/font/spacing sizing already tuned for that exact row height
+doesn't need retuning if the page size is ever changed; it has no other
+meaning any more (there's no longer a "5th row" for anything to occupy —
+whatever height that used to leave over now belongs to the filler carousel
+as a fixed block instead of a variable-height remainder). `data_store.todos` is a list of
 `{"title": str, "due": str | None, "completed": bool}` dicts, or `None` —
 `None` specifically means "no successful fetch yet" (never tried, or the
 last attempt failed), distinct from `[]` (fetch succeeded, genuinely no
@@ -240,12 +253,32 @@ checkboxes — is actively misleading in a way a stale weather reading or
 crypto price isn't, so for this widget an honest "can't connect" beats
 silently showing yesterday's data.
 
+**Task pagination.** `page_count = math.ceil(len(todos) / TODO_TASKS_PER_PAGE)`
+and `page_idx = int(time.time() // TODO_TASK_ROTATE_SECONDS) % page_count`
+pick which `TODO_TASKS_PER_PAGE`-sized slice of `todos` is on screen right
+now — the same wall-clock-derived, no-state-to-persist mechanism the
+filler carousel below uses for its own rotation, so it stays correct
+across a script restart with no counter to save/restore. A day with
+`TODO_TASKS_PER_PAGE` or fewer tasks always has exactly one page
+(`page_count == 1`), so nothing ever visibly rotates; more than that pages
+through in fixed-size groups every `TODO_TASK_ROTATE_SECONDS`. The last
+page of an uneven count (e.g. 5 tasks → pages of 3 then 2) is simply
+shorter — its remaining row(s) draw blank, same as an under-`TODO_TASKS_PER_PAGE`
+day, rather than pulling tasks forward from the next page to keep every
+page full.
+
 **The filler slot is a combined carousel, not a single leftover-space
-widget.** `displayed_count = min(len(todos), TODO_MAX_TASKS - 1)` always
-caps real task display one slot short of the full row count, so the
-filler carousel always gets at least one row — even on a day with
-`TODO_MAX_TASKS` or more real tasks, which previously left it with zero
-space and made it vanish entirely. `TODO_FILLER_WIDGET` (`"news"` |
+widget, and is now a fixed-height block independent of the task grid
+above it.** Previously the filler always got at least one row by capping
+real task display one slot short of the total row count — a coupling
+where a busy day (more tasks) meant a cramped filler and a quiet day
+(fewer tasks) meant an oversized one. Fixing task display at
+`TODO_TASKS_PER_PAGE` rows (see above) decouples the two entirely: the
+task grid is always exactly `TODO_TASKS_PER_PAGE` rows regardless of task
+count, so the filler carousel below it is always exactly
+`row_bottom - TODO_TASKS_PER_PAGE * row_h` tall too — both are fixed,
+predictable blocks now, neither one's size depends on the other's content.
+`TODO_FILLER_WIDGET` (`"news"` |
 `"nasa"`, default `"news"`) is a mode selector, same reasoning as
 `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: exactly one of the two occupies
 that half of the rotation at a time. Local default for now, intended to
@@ -285,10 +318,10 @@ row, sized to use the filler block's full height (up to 64px) rather than
 pinned to a single row's ~77px band. Because calendar events always join
 the rotation, this fallback is rarer than it was when calendar was just a
 third pickable mode — it now only fires when *both* halves of the
-carousel are empty at once. The filler block's own height still grows to
-fill whatever space real tasks don't use — one row when there are
-`TODO_MAX_TASKS - 1` or more tasks, more than one when there are fewer —
-it's only the *minimum* that's now guaranteed, not a fixed size.
+carousel are empty at once. `n_faces` is a fixed count (3) rather than
+derived from how many task rows were blank — the two blocks have no
+size relationship to each other any more (see above), so there's nothing
+meaningful left to derive it from.
 
 **`"news"`** contributes her next `NEWS_FETCH_SIZE` (5) headlines from
 newsdata.io's `/api/1/latest` (`fetch_news_headlines()`) to the carousel,

@@ -178,16 +178,27 @@ GREETING_FALLBACK_AFFIRMATIONS = [
 ]
 
 # --- TASKS WIDGET ---
-# How many task rows the widget always reserves space for, regardless of how
-# many real tasks come back — a short list just leaves empty rows rather
-# than resizing them, so the layout doesn't jump around. Row height is
-# computed from this rather than hardcoded, so changing it needs no other
-# edits.
-TODO_MAX_TASKS = 5
-# Rows beyond the real task count show one of these instead of a blank
-# checkbox row — a lighter, more celebratory "nothing here, enjoy it" than
-# an empty outline repeated a few times. Picked per row via random.choice()
-# so a short list doesn't always show the same face in the same slot.
+# How many task rows the widget shows at once — fixed, regardless of how
+# many real tasks come back, so both this widget's height and the filler
+# carousel below it are fixed, predictable blocks rather than growing or
+# shrinking with the task count from day to day. A day with fewer than
+# this many tasks just leaves the remaining rows blank; a day with more
+# pages through TODO_TASKS_PER_PAGE at a time (see TODO_TASK_ROTATE_SECONDS).
+TODO_TASKS_PER_PAGE = 3
+# How often the Tasks widget's grid advances to the next page, when there
+# are more tasks than fit on one page. Deterministic off the wall clock
+# (int(time.time() // TODO_TASK_ROTATE_SECONDS) % page_count) rather than a
+# counter in data_store — no state to persist between calls, and it stays
+# correct across a script restart — same mechanism TODO_FILLER_ROTATE_SECONDS
+# uses for the filler carousel below it. Matched to main()'s own ~60s render
+# cadence for the same reason: the display can only change on an actual
+# redraw, so a shorter value wouldn't visibly speed anything up.
+TODO_TASK_ROTATE_SECONDS = 60
+# Used only by the filler carousel's own empty-fallback (see render_screen)
+# now that it no longer has any relationship to how many task rows are
+# blank — that used to double as "how many empty task slots to draw a face
+# in" back when the filler was just leftover space rather than a widget in
+# its own right.
 TODO_EMPTY_ROW_ICONS = ["icon_face_smile", "icon_face_happy", "icon_face_laugh"]
 # Manual-testing seed only — NOT used as a live default any more now that
 # GET /api/tasks/top is live (see fetch_todos_data()); data_store.todos
@@ -2512,7 +2523,13 @@ def render_screen(epd, fonts):
 
         else:
             row_top, row_bottom = 75, 460
-            row_h = (row_bottom - row_top) / TODO_MAX_TASKS
+            # Row height is still sized off a 5-row reference, independent
+            # of TODO_TASKS_PER_PAGE, so the checkbox/font/spacing sizing
+            # tuned for this exact height doesn't need retuning if the page
+            # size ever changes — what used to be the leftover rows now
+            # goes to the filler carousel below as a fixed block instead of
+            # a variable-height remainder.
+            row_h = (row_bottom - row_top) / 5
             checkbox_size = 16
             # Wide enough for "HH:MM AM/PM" (measured ~94px at fonts['20']) with
             # a small margin — not just a round number, since that string is
@@ -2521,57 +2538,67 @@ def render_screen(epd, fonts):
             title_x = col1_x + checkbox_size + 8
             title_max_w = content_w - checkbox_size - 8 - due_col_w - 6
 
-            # The filler widget (news/NASA/faces below) is a normal widget
-            # now, not just leftover space — it always gets at least one
-            # row, even when there'd otherwise be enough tasks to fill
-            # every slot. So real tasks display at most TODO_MAX_TASKS - 1
-            # of them, one slot short of the full row count.
-            displayed_count = min(len(todos), TODO_MAX_TASKS - 1)
+            # A fixed TODO_TASKS_PER_PAGE-row grid, not one that grows or
+            # shrinks with how many tasks she has today. More tasks than
+            # fit on one page rotate through TODO_TASKS_PER_PAGE at a time,
+            # deterministically off the wall clock (see
+            # TODO_TASK_ROTATE_SECONDS) — same "no state to persist, stays
+            # correct across a restart" mechanism as the filler carousel's
+            # own rotation index below.
+            page_count = math.ceil(len(todos) / TODO_TASKS_PER_PAGE)
+            page_idx = int(time.time() // TODO_TASK_ROTATE_SECONDS) % page_count
+            page_start = page_idx * TODO_TASKS_PER_PAGE
+            page_tasks = todos[page_start:page_start + TODO_TASKS_PER_PAGE]
 
-            for i in range(displayed_count):
+            for i in range(TODO_TASKS_PER_PAGE):
                 row_y = row_top + i * row_h
-                cb_y = row_y + 4
-                completed = todos[i].get('completed', False)
 
-                if completed:
-                    # Filled box + a light checkmark cut into it, rather than an
-                    # outline — reads as "done" at a glance, matching the
-                    # strikethrough on the title below.
-                    draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), fill=0)
-                    draw.line((col1_x + 3, cb_y + 8, col1_x + 6, cb_y + 12), fill=255, width=2)
-                    draw.line((col1_x + 6, cb_y + 12, col1_x + 13, cb_y + 3), fill=255, width=2)
-                else:
-                    draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
+                if i < len(page_tasks):
+                    task = page_tasks[i]
+                    cb_y = row_y + 4
+                    completed = task.get('completed', False)
 
-                task = todos[i]
-                # Task titles will eventually be arbitrary text from the
-                # companion app's API — same "unpredictable external text"
-                # category as artist/track names and the affirmation line,
-                # so truncate in pixels rather than assume they fit.
-                title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
-                title = title[0] if title else ''
-                draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
-                if completed and title:
-                    tw = text_width(draw, title, fonts['24'])
-                    bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
-                    strike_y = (bbox[1] + bbox[3]) / 2
-                    draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
+                    if completed:
+                        # Filled box + a light checkmark cut into it, rather than an
+                        # outline — reads as "done" at a glance, matching the
+                        # strikethrough on the title below.
+                        draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), fill=0)
+                        draw.line((col1_x + 3, cb_y + 8, col1_x + 6, cb_y + 12), fill=255, width=2)
+                        draw.line((col1_x + 6, cb_y + 12, col1_x + 13, cb_y + 3), fill=255, width=2)
+                    else:
+                        draw.rectangle((col1_x, cb_y, col1_x + checkbox_size, cb_y + checkbox_size), outline=0, width=2)
 
-                due = task.get('due')
-                if due:
-                    due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
-                    due_text = due_line[0] if due_line else ''
-                    dw = text_width(draw, due_text, fonts['20'])
-                    draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
+                    # Task titles will eventually be arbitrary text from the
+                    # companion app's API — same "unpredictable external text"
+                    # category as artist/track names and the affirmation line,
+                    # so truncate in pixels rather than assume they fit.
+                    title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
+                    title = title[0] if title else ''
+                    draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
+                    if completed and title:
+                        tw = text_width(draw, title, fonts['24'])
+                        bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
+                        strike_y = (bbox[1] + bbox[3]) / 2
+                        draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
 
-                if i < TODO_MAX_TASKS - 1:
-                    sep_y = row_y + row_h - 6
-                    draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
+                    due = task.get('due')
+                    if due:
+                        due_line = wrap_lines_limited(draw, due, fonts['20'], due_col_w, max_lines=1)
+                        due_text = due_line[0] if due_line else ''
+                        dw = text_width(draw, due_text, fonts['20'])
+                        draw.text((col1_x + content_w - dw, row_y + 3), due_text, font=fonts['20'], fill=0)
+                # else: no task on this page for this slot — leave it
+                # blank (no checkbox, no title) rather than resizing the
+                # grid around it, so the widget's footprint stays fixed
+                # regardless of how many tasks come back.
 
-            # A normal widget slot, not leftover space — always at least
-            # one row (see displayed_count above), regardless of how many
-            # real tasks there were to display.
-            filler_y0 = row_top + displayed_count * row_h
+                sep_y = row_y + row_h - 6
+                draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
+
+            # A fixed-height block, not leftover space — always exactly
+            # row_bottom minus TODO_TASKS_PER_PAGE rows, regardless of how
+            # many real tasks there were to display.
+            filler_y0 = row_top + TODO_TASKS_PER_PAGE * row_h
             filler_h = row_bottom - filler_y0
 
             # Unlike a headline or a photo, a calendar event carries its
@@ -2680,11 +2707,14 @@ def render_screen(epd, fonts):
                 # Nothing to show from either source (fresh boot, missing
                 # API key/config, a fetch failure, no calendar events
                 # pushed yet, or — NASA only — today's APOD is a video) —
-                # fall back to a row of cheerful faces, one per remaining
-                # slot, laid out side by side and centred in the filler
-                # block rather than stacked one per row — bigger and more
-                # legible than pinning each to its own narrow row band.
-                n_faces = TODO_MAX_TASKS - displayed_count
+                # fall back to a row of cheerful faces, laid out side by
+                # side and centred in the filler block rather than stacked
+                # one per row — bigger and more legible than pinning each
+                # to its own narrow row band. A fixed count, not one
+                # derived from the task grid above (which now has no
+                # relationship to this block's size — both are fixed
+                # independently, see TODO_TASKS_PER_PAGE).
+                n_faces = 3
                 face_size = min(64, int(filler_h) - 20)
                 spacing = 16
                 total_w = n_faces * face_size + (n_faces - 1) * spacing

@@ -187,10 +187,10 @@ blocked-by-policy error, that's IT policy — ask your admin, or use a personal 
    them automatically in the background from then on — no further logins needed.
 
 ### Tasks widget filler: News or NASA, plus her calendar (always on)
-The Tasks widget (`ENABLE_TODO`) always reserves at least one row for a filler carousel — instead
-of a blank checkbox grid, even on a day with `TODO_MAX_TASKS` or more real tasks. Real tasks
-display up to `TODO_MAX_TASKS - 1` of them, one slot short of the full row count; on a lighter day,
-the filler grows to use whatever space the remaining tasks don't.
+The Tasks widget (`ENABLE_TODO`) shows a fixed `TODO_TASKS_PER_PAGE` (3) task rows, with a filler
+carousel taking up the fixed amount of space below them — both are fixed-size blocks, neither one
+growing or shrinking based on how many real tasks come back. Fewer than 3 tasks just leaves the
+remaining rows blank; more than 3 pages through 3 at a time every `TODO_TASK_ROTATE_SECONDS` (60s).
 
 The carousel combines two things: whichever of News or NASA `TODO_FILLER_WIDGET` in `main.py`
 names (`"news"` or `"nasa"`, defaults to `"news"`) — only one of those two is active at a time, you
