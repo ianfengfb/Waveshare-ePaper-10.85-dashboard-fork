@@ -267,6 +267,17 @@ shorter — its remaining row(s) draw blank, same as an under-`TODO_TASKS_PER_PA
 day, rather than pulling tasks forward from the next page to keep every
 page full.
 
+`TODO_TASK_DOTS_H` (16px) is carved out of the task grid's own footprint
+(each row a little shorter — `row_h = (task_section_h - TODO_TASK_DOTS_H)
+/ TODO_TASKS_PER_PAGE`), not out of the filler carousel below it, since the
+pagination cue is this widget's own feature. It's always reserved — every
+row is always this slightly-shorter height — rather than only on days with
+multiple pages, so the grid doesn't visibly change size from one day to
+the next depending on the task count; only whether `draw_rotation_dots()`
+actually draws into that reserved strip depends on `page_count > 1`, same
+"only call it when there's more than one thing to show" guard as the
+filler carousel's own dot row (which this widget reuses).
+
 **The filler slot is a combined carousel, not a single leftover-space
 widget, and is now a fixed-height block independent of the task grid
 above it.** Previously the filler always got at least one row by capping
@@ -340,6 +351,13 @@ headlines don't need to feel real-time, and this also bounds how often
 the companion app gets a fresh batch (see below). `NEWS_API_CONF` holds
 a gitignored `{"api_key": ...}` file, same never-commit-a-secret pattern
 as every other credential here.
+
+The headline slide draws at `fonts['20']`, a size smaller than the
+calendar slide's `fonts['24']` title font despite sharing the same slide
+layout — real newsdata.io headlines run long, and the smaller size fits
+more of one on screen before `wrap_lines_limited()` has to ellipsis-
+truncate it, at the cost of reading slightly less bold than the calendar
+slide next to it in the rotation.
 
 **The `content` field is never used, on screen or off.** newsdata.io's
 free tier returns the literal string `"ONLY AVAILABLE IN PAID PLANS"`

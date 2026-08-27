@@ -194,6 +194,16 @@ TODO_TASKS_PER_PAGE = 3
 # cadence for the same reason: the display can only change on an actual
 # redraw, so a shorter value wouldn't visibly speed anything up.
 TODO_TASK_ROTATE_SECONDS = 60
+# Height reserved at the bottom of the task grid for a pagination dot row
+# (draw_rotation_dots(), the same helper the filler carousel below uses),
+# so a day with more than TODO_TASKS_PER_PAGE tasks gives Charlotte a
+# visual "there's more" cue rather than the page just silently changing
+# underneath her. Always reserved (each task row shrinks slightly to make
+# room for it) rather than only on days with multiple pages, so the grid's
+# row height doesn't visibly change from one day to the next depending on
+# how many tasks she has — the dots themselves still only draw when
+# page_count > 1.
+TODO_TASK_DOTS_H = 16
 # Used only by the filler carousel's own empty-fallback (see render_screen)
 # now that it no longer has any relationship to how many task rows are
 # blank — that used to double as "how many empty task slots to draw a face
@@ -2528,8 +2538,12 @@ def render_screen(epd, fonts):
             # tuned for this exact height doesn't need retuning if the page
             # size ever changes — what used to be the leftover rows now
             # goes to the filler carousel below as a fixed block instead of
-            # a variable-height remainder.
-            row_h = (row_bottom - row_top) / 5
+            # a variable-height remainder. TODO_TASK_DOTS_H is carved out of
+            # this same task-section footprint (each row a little shorter),
+            # not out of the filler carousel below it — the pagination dots
+            # are this widget's own feature, not the filler's.
+            task_section_h = (row_bottom - row_top) / 5 * TODO_TASKS_PER_PAGE
+            row_h = (task_section_h - TODO_TASK_DOTS_H) / TODO_TASKS_PER_PAGE
             checkbox_size = 16
             # Wide enough for "HH:MM AM/PM" (measured ~94px at fonts['20']) with
             # a small margin — not just a round number, since that string is
@@ -2595,10 +2609,19 @@ def render_screen(epd, fonts):
                 sep_y = row_y + row_h - 6
                 draw.line((col1_x, sep_y, col1_x + content_w, sep_y), fill=0, width=1)
 
+            # A small dot row (filled = current position) in the space
+            # carved out of the task rows above, cueing "there are more
+            # tasks than fit on one page" — only drawn when there actually
+            # is more than one page, same guard as the filler carousel's
+            # own dot row.
+            if page_count > 1:
+                dots_y0 = row_top + TODO_TASKS_PER_PAGE * row_h
+                draw_rotation_dots(draw, col1_x, content_w, dots_y0, TODO_TASK_DOTS_H, page_count, page_idx)
+
             # A fixed-height block, not leftover space — always exactly
-            # row_bottom minus TODO_TASKS_PER_PAGE rows, regardless of how
-            # many real tasks there were to display.
-            filler_y0 = row_top + TODO_TASKS_PER_PAGE * row_h
+            # row_bottom minus the task section (rows + dot row), regardless
+            # of how many real tasks there were to display.
+            filler_y0 = row_top + task_section_h
             filler_h = row_bottom - filler_y0
 
             # Unlike a headline or a photo, a calendar event carries its
@@ -2652,8 +2675,13 @@ def render_screen(epd, fonts):
                     label_y = filler_y0 + 6
                     draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
 
-                    headline_font = fonts['24']
-                    line_h = 30
+                    # Smaller than the calendar slide's title font — real
+                    # headlines from newsdata.io run long, and a smaller
+                    # size fits more of one on screen before truncating
+                    # with an ellipsis, at the cost of being a bit less
+                    # bold than the calendar event title next to it.
+                    headline_font = fonts['20']
+                    line_h = 25
                     max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
                     lines = wrap_lines_limited(draw, slide_data['title'], headline_font, content_w, max_lines=max_lines)
                     text_h = len(lines) * line_h
