@@ -443,6 +443,29 @@ def timeout_handler(signum, frame):
     raise HardwareTimeoutError("Hardware Busy-Wait Timeout")
 
 
+def _redact_url(url):
+    """Strips a URL's query string before it ever reaches a log line — a
+    couple of endpoints (NASA APOD, NewsAPI) pass their API key that way
+    per their own API's design, and dashboard.log is local but not a
+    secret store."""
+    return url.split('?', 1)[0]
+
+
+def _redact_error(exc, url):
+    """requests/urllib3 exceptions (e.g. a connection failure) often embed
+    the request's path *and query string* inside their own message text
+    (typically without the scheme/host prefix, e.g. "url: /path?api_key=
+    ..."), so matching against the full original `url` isn't enough —
+    this instead scrubs the raw query-string substring itself out of the
+    exception's string form, however it's embedded, before it's logged."""
+    text = str(exc)
+    if '?' in url:
+        query = url.split('?', 1)[1]
+        if query:
+            text = text.replace(query, '[redacted]')
+    return text
+
+
 # --- ROBUST NETWORK MANAGER ---
 class NetworkManager:
     def __init__(self):
@@ -474,6 +497,7 @@ class NetworkManager:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
+            logging.error(f"Network request failed ({method} {_redact_url(url)}): {_redact_error(e, url)}")
             self.create_session()
             return None
 
@@ -484,6 +508,7 @@ class NetworkManager:
             resp.raise_for_status()
             return resp.content
         except Exception as e:
+            logging.error(f"Image request failed ({_redact_url(url)}): {_redact_error(e, url)}")
             self.create_session()
             return None
 
