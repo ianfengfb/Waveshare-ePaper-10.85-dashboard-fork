@@ -301,21 +301,26 @@ WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
 
-# Which source fills the Tasks widget's filler row(s): "news", "nasa", or
-# "calendar". A single mode selector rather than independent ENABLE_*
-# flags, same reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly
-# one occupies that space at a time. Local default for now, intended to
-# eventually be set remotely via the companion app's /api/widget-config
-# endpoint the same way those two are — see CLAUDE.md roadmap.
+# Which of news or NASA shares the Tasks widget's filler slot: "news" or
+# "nasa". A mode selector rather than independent ENABLE_* flags, same
+# reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly one of the
+# two occupies that half of the rotation at a time. Local default for
+# now, intended to eventually be set remotely via the companion app's
+# /api/widget-config endpoint the same way those two are — see CLAUDE.md
+# roadmap. Calendar events are NOT part of this selector — they always
+# join the rotation whenever there are any upcoming, regardless of
+# whether news or NASA is chosen here (see "Left column: Tasks" in
+# CLAUDE.md for the combined-carousel design).
 TODO_FILLER_WIDGET = "news"
 
-# How many seconds each of the "calendar" filler's up-to-3 events stays on
-# screen before rotating to the next one. Matched to main()'s own ~60s
-# render cadence — a shorter value here would just mean some redraws land
-# in the same rotation bucket as the last one (no visible change) rather
-# than smoothly speeding up the rotation, since the display can only ever
-# change on an actual redraw.
-CALENDAR_ROTATE_SECONDS = 60
+# How long each slide in the Tasks widget's filler carousel stays on
+# screen before rotating to the next one — a "slide" being one news
+# headline, the single NASA photo, or one calendar event. Matched to
+# main()'s own ~60s render cadence — a shorter value here would just mean
+# some redraws land in the same rotation bucket as the last one (no
+# visible change) rather than smoothly speeding up the rotation, since
+# the display can only ever change on an actual redraw.
+TODO_FILLER_ROTATE_SECONDS = 60
 
 # newsdata.io — free key from newsdata.io, entered once by hand into a
 # gitignored config file, same "never commit a secret" pattern as every
@@ -331,14 +336,10 @@ NEWS_API_CONF = {
 # "Canberra" than the country code) so this is the closest available
 # match for "news a tax accountant in Canberra would want".
 NEWS_COUNTRY = 'au'
-# How many headlines to fetch and rotate through in the Tasks widget's
-# filler — see "News" in CLAUDE.md for the rotation behaviour.
+# How many headlines to fetch and join into the Tasks widget's filler
+# carousel — see "Left column: Tasks" in CLAUDE.md for the rotation
+# behaviour (shared with calendar events via TODO_FILLER_ROTATE_SECONDS).
 NEWS_FETCH_SIZE = 5
-# How long each of the up-to-NEWS_FETCH_SIZE headlines stays on screen
-# before rotating to the next — same reasoning as CALENDAR_ROTATE_SECONDS
-# below: matched to main()'s own ~60s render cadence, since the display
-# can only ever change on an actual redraw.
-NEWS_ROTATE_SECONDS = 60
 # If any headline in the fetched batch contains one of these, it's
 # sorted to the front of the rotation — a lightweight nudge towards
 # "actually relevant to a tax accountant" without narrowing the query
@@ -588,23 +589,28 @@ class DataStore:
         }
         # Up to NEWS_FETCH_SIZE {"title": str, "link": str, "description":
         # str, "source_name": str, "published_at": ISO8601 str | None}
-        # dicts that fill the Tasks widget's filler rows, or None — see
-        # fetch_news_headlines(). None falls back to TODO_EMPTY_ROW_ICONS.
-        # Only populated while TODO_FILLER_WIDGET == "news". The Pi only
-        # ever displays each article's title (rotating through all of
-        # them); the rest of each dict is pushed to the companion app via
-        # post_news_articles() so she can read past the headline there.
+        # dicts that join the Tasks widget's filler carousel, or None —
+        # see fetch_news_headlines(). Only populated while
+        # TODO_FILLER_WIDGET == "news". The Pi only ever displays each
+        # article's title (rotating through all of them, interleaved with
+        # calendar_events below); the rest of each dict is pushed to the
+        # companion app via post_news_articles() so she can read past the
+        # headline there.
         self.news_headlines = None
         # Greyscale PIL Image (NASA's Astronomy Picture of the Day), or
         # None — see fetch_nasa_apod_image(). Only populated while
-        # TODO_FILLER_WIDGET == "nasa"; same fallback as news_headlines.
+        # TODO_FILLER_WIDGET == "nasa".
         self.nasa_apod = None
         # Up to 3 {"title": str, "start_time": ISO8601 str} dicts, soonest
         # first, or None — see fetch_calendar_events(). Populated by an
         # iPhone Shortcuts automation pushing her calendar to the
-        # companion app; the Pi only ever reads the latest snapshot. None
-        # falls back to TODO_EMPTY_ROW_ICONS, same as news_headlines/
-        # nasa_apod. Only populated while TODO_FILLER_WIDGET == "calendar".
+        # companion app; the Pi only ever reads the latest snapshot.
+        # Unlike news_headlines/nasa_apod, this is NOT gated by
+        # TODO_FILLER_WIDGET — calendar events always join the filler
+        # carousel whenever there are any upcoming, regardless of
+        # whether news or NASA is the other half of the rotation (see
+        # CLAUDE.md). None (or no upcoming events) falls back to
+        # TODO_EMPTY_ROW_ICONS only when news/NASA also has nothing.
         self.calendar_events = None
         # A remote full-screen takeover: while enabled is True, render_screen()
         # replaces every widget with just `message`, auto-sized to fill the
@@ -2112,22 +2118,22 @@ def update_data_thread():
                 if middle_widget in ('spotify', 'weather'):
                     MIDDLE_COLUMN_WIDGET = middle_widget
                 todo_filler = cfg.get('todo_filler')
-                if todo_filler in ('news', 'nasa', 'calendar'):
+                if todo_filler in ('news', 'nasa'):
                     TODO_FILLER_WIDGET = todo_filler
             data_store.last_update['widget_config'] = now
 
-        # Only fetches whichever of news/NASA/calendar is the active
-        # TODO_FILLER_WIDGET — no point polling all three when just one
-        # fills the Tasks widget's filler space at a time. Every 4 hours
-        # for news — a handful of headlines don't need to feel real-time,
-        # and this also bounds how often post_news_articles() pushes a
-        # fresh batch to the companion app. NASA's photo changes once a
-        # day, so hourly there is already far more often than needed.
-        # Only updates data_store on success, same "don't blank a working
-        # widget on one bad fetch" convention as most fetches in this
-        # file (unlike the Tasks fetch itself) — a slightly stale
-        # headline/photo/event list isn't misleading the way a stale
-        # task list is.
+        # Only fetches whichever of news/NASA is the active
+        # TODO_FILLER_WIDGET — no point polling both when just one fills
+        # half of the Tasks widget's filler carousel at a time. Every 4
+        # hours for news — a handful of headlines don't need to feel
+        # real-time, and this also bounds how often post_news_articles()
+        # pushes a fresh batch to the companion app. NASA's photo changes
+        # once a day, so hourly there is already far more often than
+        # needed. Only updates data_store on success, same "don't blank
+        # a working widget on one bad fetch" convention as most fetches
+        # in this file (unlike the Tasks fetch itself) — a slightly
+        # stale headline/photo isn't misleading the way a stale task
+        # list is.
         if ENABLE_TODO and TODO_FILLER_WIDGET == "news" and now - data_store.last_update['news_headlines'] > 14400:
             headlines = fetch_news_headlines()
             if headlines is not None:
@@ -2142,11 +2148,15 @@ def update_data_thread():
                     data_store.nasa_apod = apod_img
             data_store.last_update['nasa_apod'] = now
 
-        # Polled every 300s, faster than news/NASA's hourly cadence —
-        # unlike those two, "is this event starting soon" is time-
-        # sensitive, even though the underlying data on the companion app
-        # only changes whenever her iPhone Shortcut last ran.
-        if ENABLE_TODO and TODO_FILLER_WIDGET == "calendar" and now - data_store.last_update['calendar_events'] > 300:
+        # Unlike news/NASA above, NOT gated by TODO_FILLER_WIDGET —
+        # calendar events always join the filler carousel whenever
+        # there are any upcoming, regardless of which of news/NASA is
+        # the other half of the rotation (see CLAUDE.md). Polled every
+        # 300s, faster than news/NASA's cadence — "is this event
+        # starting soon" is time-sensitive, even though the underlying
+        # data on the companion app only changes whenever her iPhone
+        # Shortcut last ran.
+        if ENABLE_TODO and now - data_store.last_update['calendar_events'] > 300:
             events = fetch_calendar_events()
             if events is not None:
                 with data_store.lock:
@@ -2580,99 +2590,100 @@ def render_screen(epd, fonts):
                     if parsed is not None and parsed >= now_dt:
                         upcoming_calendar_events.append(ev)
 
+            # A single combined carousel rather than three mutually
+            # exclusive widgets: calendar events always join whenever
+            # there are any upcoming, and whichever of news/NASA is
+            # selected fills the rest — "News" then "Calendar" as two
+            # contiguous blocks in rotation order, not interleaved.
+            filler_slides = []
             if TODO_FILLER_WIDGET == "news" and news_headlines:
-                # One headline at a time, rotating through up to
-                # NEWS_FETCH_SIZE on a NEWS_ROTATE_SECONDS cycle
-                # (deterministic off the wall clock — no counter/state to
-                # maintain), same rotation approach as the calendar
-                # filler below. A small label first so a lone sentence
-                # doesn't look like a stray fragment; the headline itself
-                # is pixel-wrapped since it's unpredictable external
-                # text, same reasoning as task titles/due times.
-                idx = int(time.time() // NEWS_ROTATE_SECONDS) % len(news_headlines)
-                headline = news_headlines[idx]['title']
-
-                label_y = filler_y0 + 6
-                draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
-
-                # Same dot-row treatment as the calendar filler — only
-                # drawn when there's more than one headline to cycle
-                # through.
-                dots_h = 16 if len(news_headlines) > 1 else 0
-
-                headline_font = fonts['24']
-                line_h = 30
-                max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
-                lines = wrap_lines_limited(draw, headline, headline_font, content_w, max_lines=max_lines)
-                text_h = len(lines) * line_h
-                avail_h = filler_h - 30 - dots_h
-                text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
-                for li, line in enumerate(lines):
-                    lw = text_width(draw, line, headline_font)
-                    draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
-                              line, font=headline_font, fill=0)
-
-                if dots_h:
-                    draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h, len(news_headlines), idx)
-
+                filler_slides.extend(('news', h) for h in news_headlines)
             elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
-                # One photo spanning the whole filler block, not one copy
-                # per empty row — NASA's photo of the day is often a busy
-                # starfield/nebula shot, so it needs real room to read as
-                # a picture rather than noise once dithered down to 1-bit.
-                # Cover-fit (crop to fill, not letterbox) since a
-                # fully-bled photo reads better here than a smaller
-                # centred one on a blank margin.
-                fitted = ImageOps.fit(nasa_apod, (int(content_w), int(filler_h)), Image.LANCZOS)
-                fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
-                dithered = fitted.convert("1", dither=Image.NONE)
-                Himage.paste(dithered, (col1_x, int(filler_y0)))
+                filler_slides.append(('nasa', None))
+            filler_slides.extend(('calendar', e) for e in upcoming_calendar_events)
 
-            elif TODO_FILLER_WIDGET == "calendar" and upcoming_calendar_events:
-                # One event at a time, rotating through up to 3 on a
-                # CALENDAR_ROTATE_SECONDS cycle (deterministic off the wall
-                # clock — no counter/state to maintain) — same "obviously
-                # only fits one" reasoning as the news headline above, but
-                # cycling since there's more than one thing worth surfacing.
-                idx = int(time.time() // CALENDAR_ROTATE_SECONDS) % len(upcoming_calendar_events)
-                event = upcoming_calendar_events[idx]
-
-                label_y = filler_y0 + 6
-                draw.text((col1_x, label_y), "UPCOMING", font=fonts['14'], fill=0)
-                time_str = _format_calendar_time(event['start_time'])
-                tw = text_width(draw, time_str, fonts['14'])
-                draw.text((col1_x + content_w - tw, label_y), time_str, font=fonts['14'], fill=0)
+            if filler_slides:
+                # Deterministic off the wall clock (no counter/state to
+                # maintain) — one TODO_FILLER_ROTATE_SECONDS-long slide at
+                # a time, cycling through news/NASA then calendar events
+                # in the order they were appended above.
+                idx = int(time.time() // TODO_FILLER_ROTATE_SECONDS) % len(filler_slides)
+                slide_type, slide_data = filler_slides[idx]
 
                 # A small dot row (filled = current position) so the
-                # rotation reads as "cycling through 3 things" rather than
-                # a single, seemingly-random event — only drawn when
-                # there's more than one to cycle through.
-                dots_h = 16 if len(upcoming_calendar_events) > 1 else 0
+                # rotation reads as "cycling through several things"
+                # rather than a single, seemingly-random item — only
+                # drawn (and only reserved space) when there's more than
+                # one slide total across both sources combined.
+                dots_h = 16 if len(filler_slides) > 1 else 0
 
-                title_font = fonts['24']
-                line_h = 30
-                max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
-                lines = wrap_lines_limited(draw, event['title'], title_font, content_w, max_lines=max_lines)
-                text_h = len(lines) * line_h
-                avail_h = filler_h - 30 - dots_h
-                text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
-                for li, line in enumerate(lines):
-                    lw = text_width(draw, line, title_font)
-                    draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
-                              line, font=title_font, fill=0)
+                if slide_type == "news":
+                    # A small label first so a lone sentence doesn't look
+                    # like a stray fragment; the headline itself is
+                    # pixel-wrapped since it's unpredictable external
+                    # text, same reasoning as task titles/due times.
+                    label_y = filler_y0 + 6
+                    draw.text((col1_x, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
+
+                    headline_font = fonts['24']
+                    line_h = 30
+                    max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
+                    lines = wrap_lines_limited(draw, slide_data['title'], headline_font, content_w, max_lines=max_lines)
+                    text_h = len(lines) * line_h
+                    avail_h = filler_h - 30 - dots_h
+                    text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
+                    for li, line in enumerate(lines):
+                        lw = text_width(draw, line, headline_font)
+                        draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                                  line, font=headline_font, fill=0)
+
+                elif slide_type == "nasa":
+                    # One photo spanning the filler block — NASA's photo
+                    # of the day is often a busy starfield/nebula shot, so
+                    # it needs real room to read as a picture rather than
+                    # noise once dithered down to 1-bit. Cover-fit (crop
+                    # to fill, not letterbox) since a fully-bled photo
+                    # reads better here than a smaller centred one on a
+                    # blank margin. Shrunk by dots_h only when calendar
+                    # events are also in the rotation — otherwise (NASA is
+                    # the only slide) it fills the whole block as before.
+                    photo_h = filler_h - dots_h
+                    fitted = ImageOps.fit(nasa_apod, (int(content_w), int(photo_h)), Image.LANCZOS)
+                    fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
+                    dithered = fitted.convert("1", dither=Image.NONE)
+                    Himage.paste(dithered, (col1_x, int(filler_y0)))
+
+                elif slide_type == "calendar":
+                    event = slide_data
+                    label_y = filler_y0 + 6
+                    draw.text((col1_x, label_y), "UPCOMING", font=fonts['14'], fill=0)
+                    time_str = _format_calendar_time(event['start_time'])
+                    tw = text_width(draw, time_str, fonts['14'])
+                    draw.text((col1_x + content_w - tw, label_y), time_str, font=fonts['14'], fill=0)
+
+                    title_font = fonts['24']
+                    line_h = 30
+                    max_lines = max(1, int((filler_h - 30 - dots_h) / line_h))
+                    lines = wrap_lines_limited(draw, event['title'], title_font, content_w, max_lines=max_lines)
+                    text_h = len(lines) * line_h
+                    avail_h = filler_h - 30 - dots_h
+                    text_y0 = label_y + 24 + max(0, (avail_h - text_h) / 2)
+                    for li, line in enumerate(lines):
+                        lw = text_width(draw, line, title_font)
+                        draw.text((col1_x + max(0, (content_w - lw) / 2), text_y0 + li * line_h),
+                                  line, font=title_font, fill=0)
 
                 if dots_h:
-                    draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h,
-                                       len(upcoming_calendar_events), idx)
+                    draw_rotation_dots(draw, col1_x, content_w, filler_y0, filler_h, len(filler_slides), idx)
 
             else:
-                # Nothing to show (fresh boot, missing API key/config, a
-                # fetch failure, no calendar events pushed yet, or — NASA
-                # only — today's APOD is a video) — fall back to a row of
-                # cheerful faces, one per remaining slot, laid out side by
-                # side and centred in the filler block rather than
-                # stacked one per row — bigger and more legible than
-                # pinning each to its own narrow row band.
+                # Nothing to show from either source (fresh boot, missing
+                # API key/config, a fetch failure, no calendar events
+                # pushed yet, or — NASA only — today's APOD is a video) —
+                # fall back to a row of cheerful faces, one per remaining
+                # slot, laid out side by side and centred in the filler
+                # block rather than stacked one per row — bigger and more
+                # legible than pinning each to its own narrow row band.
                 n_faces = TODO_MAX_TASKS - displayed_count
                 face_size = min(64, int(filler_h) - 20)
                 spacing = 16
