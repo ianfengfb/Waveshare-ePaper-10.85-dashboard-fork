@@ -139,9 +139,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-o', '--output', default=os.path.join(BASE_DIR, 'output.png'),
                          help="Path to write the rendered PNG (default: output.png)")
-    parser.add_argument('--settle', type=float, default=6.0,
-                         help="Seconds to let the background data-fetch thread populate "
-                              "weather/crypto/ping before rendering the frame (default: 6)")
+    parser.add_argument('--settle', type=float, default=30.0,
+                         help="Max seconds to wait for the background data-fetch thread's "
+                              "first full pass (weather/crypto/ping/todos/etc.) before "
+                              "rendering the frame regardless (default: 30). Usually returns "
+                              "much sooner — see first_fetch_pass_done in main.py.")
     args = parser.parse_args()
 
     on_hardware = _hardware_available()
@@ -170,8 +172,11 @@ def main():
     fetch_thread = threading.Thread(target=dashboard.update_data_thread, daemon=True)
     fetch_thread.start()
     if args.settle > 0:
-        print(f"Waiting {args.settle:.0f}s for weather/crypto/ping to populate...")
-        time.sleep(args.settle)
+        print(f"Waiting up to {args.settle:.0f}s for the first data-fetch pass to finish...")
+        finished = dashboard.first_fetch_pass_done.wait(timeout=args.settle)
+        if not finished:
+            print(f"First fetch pass still running after {args.settle:.0f}s — "
+                  "rendering anyway with whatever's populated so far.")
 
     image = dashboard.render_screen(epd, fonts)
     buf = epd.getbuffer(image)

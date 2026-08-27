@@ -606,6 +606,15 @@ class DataStore:
 
 data_store = DataStore()
 
+# Set once update_data_thread() completes its first full pass through
+# every gated fetch (every last_update timer starts at 0, so the first
+# pass runs all of them sequentially — weather, crypto, ping, todos,
+# etc. — before any of their normal, much longer intervals apply). Lets
+# render_preview.py wait for real data instead of guessing a fixed sleep
+# duration; main()'s own loop never touches this since the Pi renders
+# continuously regardless of whether the first pass has finished yet.
+first_fetch_pass_done = threading.Event()
+
 
 # --- HELPERS ---
 def ping_printer(ip):
@@ -2084,6 +2093,7 @@ def update_data_thread():
                     data_store.calendar_events = events
             data_store.last_update['calendar_events'] = now
 
+        first_fetch_pass_done.set()
         gc.collect()
         time.sleep(1)
 

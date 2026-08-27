@@ -76,8 +76,25 @@ The fix has to happen at the **import** level, before that line executes:
 4. `render_preview.py` then imports `main`, calls `main.load_fonts()` and
    `main.render_screen(epd, fonts)` directly (skipping `main()`'s infinite
    `while True` refresh loop, which is Pi-only), and starts
-   `update_data_thread` briefly first so keyless public APIs (weather,
-   crypto, ping) get a chance to populate before the one frame is rendered.
+   `update_data_thread` briefly first so every widget gets a chance to
+   populate before the one frame is rendered — waiting on
+   `main.first_fetch_pass_done` (a `threading.Event()` set once
+   `update_data_thread()`'s first loop iteration finishes every gated
+   fetch, since every `last_update` timer starts at 0) rather than a
+   fixed `time.sleep()`. That first pass runs *every* fetch sequentially
+   — weather, crypto, ping, todos, water, away-message, system-status,
+   whichever `TODO_FILLER_WIDGET` source, etc. — so a flat sleep long
+   enough to reliably cover all of them on a slow/jittery connection
+   would waste time on a fast one, and one too short (the original
+   default was 6s) intermittently snapshots the frame mid-fetch: no
+   error, just `data_store.todos` (or anything else) still at its
+   pre-fetch default, which looks identical to a real failure. `--settle`
+   is now a timeout on that wait (default 30s) rather than an
+   unconditional sleep — it still renders once that timeout elapses, just
+   with whatever happened to populate by then, so the tool never hangs
+   forever on one stuck fetch. `main()`'s own Pi loop never touches this
+   event; it doesn't need to, since it redraws continuously regardless of
+   whether the first pass has finished yet.
 
 `main.py` also has one Windows-incompatibility unrelated to the display: it
 imported the POSIX-only `resource` module unconditionally at the top level.
