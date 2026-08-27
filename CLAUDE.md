@@ -797,3 +797,13 @@ until asked:
   degrade to last-known-value or a placeholder, never crash the frame.
 - Stagger initial network requests (see `update_data_thread`) — don't
   parallelise widget fetches without a reason.
+- Every `NetworkManager` failure is logged (`logging.error(...)` in
+  `get_json()`/`get_image()`'s except blocks) rather than silently
+  swallowed — degrading gracefully on screen doesn't mean the failure
+  should be undiagnosable in `dashboard.log`. Always log through
+  `_redact_url()`/`_redact_error()` rather than the raw `url`/exception
+  text directly: NASA APOD and NewsAPI both pass their API key as a
+  query-string parameter (per those APIs' own design, not something this
+  project chose), and `requests`/`urllib3` connection-failure exceptions
+  often embed that same query string verbatim inside their own message —
+  so redacting only the URL you explicitly log isn't enough on its own.
