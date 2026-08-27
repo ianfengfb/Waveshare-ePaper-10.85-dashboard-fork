@@ -60,6 +60,18 @@ ENABLE_ROBOROCK = False
 ENABLE_ANTIGRAVITY = False
 ENABLE_CODEX = False
 ENABLE_CLAUDE = False
+# Off by default (unlike the sysload/ping fallbacks it sits alongside),
+# since — unlike those two — it was never repurposed into anything this
+# deployment actually uses (see "System status reporting" in CLAUDE.md,
+# which explicitly excludes crypto as market-data novelty, not Pi
+# health). Left as a togglable flag rather than deleted outright, same
+# "keep it re-enablable without redeploying" reasoning as every other
+# ENABLE_* here — but the fetch itself (two CoinGecko calls every 600s)
+# is otherwise pure waste: no code ever draws it, since Column 1 is
+# permanently the Tasks widget (ENABLE_TODO), and it was intermittently
+# rate-limited (HTTP 429) badly enough to stall the rest of
+# update_data_thread's sequential first pass behind it.
+ENABLE_CRYPTO = False
 # Defaults on (unlike the other credentialed toggles above) since Spotify
 # OAuth is already set up and confirmed working for this deployment —
 # auth_spotify() only ever prompts when spotify_token.json is missing, so
@@ -1781,7 +1793,7 @@ def update_data_thread():
                     with data_store.lock:
                         data_store.printer['status'] = 'OFFLINE'
                 data_store.last_update['printer'] = now
-        else:
+        elif ENABLE_CRYPTO:
             if now - data_store.last_update['crypto'] > 600:
                 btc_url = f"{API_ENDPOINTS['btc']}?vs_currency=usd&days=7"
                 eth_url = f"{API_ENDPOINTS['eth']}?vs_currency=usd&days=7"
