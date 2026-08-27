@@ -825,6 +825,21 @@ Deliberately excludes crypto prices (BTC/ETH) — that's market-data
 novelty from the same "hide the unused fallback widgets" family, not Pi
 health, so it isn't part of this report.
 
+**`ENABLE_CRYPTO` (default `False`) gates the BTC/ETH fetch itself.**
+Unlike sysload/ping, crypto was never repurposed into anything this
+deployment uses (see just above) — it was only ever the `else` branch
+of `if ENABLE_BAMBU:`, so it ran unconditionally whenever `ENABLE_BAMBU`
+was off, for a widget slot nothing ever draws. It also turned out to be
+a real cost, not just a wasted one: CoinGecko's free tier rate-limits
+(HTTP 429) readily, and `update_data_thread`'s first pass runs every
+gated fetch sequentially — a stalled/retrying crypto call there ate
+into the time every fetch after it in that same pass gets, including
+`render_preview.py`'s `first_fetch_pass_done` wait. `ENABLE_BAMBU:
+... elif ENABLE_CRYPTO: ...` now keeps crypto off unless explicitly
+turned back on — same "keep it re-enablable without redeploying"
+reasoning as every other `ENABLE_*` flag, rather than deleting the
+fetch outright.
+
 **Cadence: every 300s.** Slower than `away_message` (15s) or
 `water`/`hydration` (20s) since nothing here needs to be caught within
 minutes — it's a vitals check, not something driving an on-screen
