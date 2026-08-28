@@ -2852,7 +2852,7 @@ def render_screen(epd, fonts):
                 word, list_font_key = random.choice(GREETING_INTL_HELLOS)
                 is_cjk = (list_font_key == 'cjk_greeting')
             word_font = fonts['cjk_greeting_corner'] if is_cjk else fonts['24']
-            segments = [(word, word_font), (" ", fonts['24'])]
+            segments = [(word, word_font), (", ", fonts['24'])]
         else:
             dt = datetime.now()
             if dt.hour < 12:
@@ -2861,8 +2861,8 @@ def render_screen(epd, fonts):
                 time_word = "Afternoon"
             else:
                 time_word = "Evening"
-            segments = [(f"{time_word} ", fonts['24'])]
-        segments.append((GREETING_NAME, fonts['32']))
+            segments = [(f"{time_word}, ", fonts['24'])]
+        segments.append((f"{GREETING_NAME}!", fonts['32']))
 
         seg_w = sum(text_width(draw, t, f) for t, f in segments)
         draw_mixed_text(draw, x0 + max(0, (corner_w - seg_w) / 2), y0 + small_h + big_h / 2, segments)

@@ -1093,6 +1093,23 @@ font depending on state — a fixed pixel offset that centred one badly
 misplaced the other. Shared by both states in that corner; reach for it
 first before hand-rolling a new centring offset in any other corner.
 
+**Icon+text pairings (the email/nag badge, and any future one) need a
+visual check, not just trusting the centring math.** The badge's icon
+and text are both centred against the same target line
+(`y0 + small_h / 2`), and pixel-measuring the actual rendered output
+confirmed both land within a pixel of true centre — so a reported
+"not centred" look, when one comes up again, is worth checking against
+the *exact* corner rectangle before assuming the drawing code is wrong.
+The concrete trap this session hit: an ad hoc test crop
+(`img.crop((400, 0, 800, 240))`) used round numbers instead of the
+corner's real bounds (`(408, 16, 784, 232)`), so the preview PNG showed
+the badge sitting a few pixels off from the crop's edges — a false
+positive from the *test script*, not the widget. Always crop preview
+renders to the exact `corners[...]` tuple (or the padded content rect)
+when eyeballing alignment, and when in doubt, measure the ink bbox
+directly (`img.crop(...).point(...).getbbox()`) rather than eyeballing
+a small thumbnail.
+
 **The clock/greeting corner's two states are two full branches, not a
 shared generic loop.** An earlier version tried to draw all three bands
 (top/mid/bottom) through one loop keyed by font size, but the mid/bottom
@@ -1103,14 +1120,24 @@ is a single font; the greeting's bottom line wraps to 2 lines
 abstraction to special-case both cost more than just writing two
 explicit branches.
 
-The greeting state's headline is ported unchanged from the retired
-layout's own greeting widget: a time-of-day word 30%
-(`GREETING_INTL_CHANCE`) of the time, an international hello the other
-70% (50/50 Chinese vs the rest of `GREETING_INTL_HELLOS`), same
-probabilities and word lists — just drawn into this corner's smaller
-big-band instead of the old column's fixed y-position, with no
-wrapping/truncation (same as the original — every combination was
-already confirmed to fit).
+The greeting state's headline is ported from the retired layout's own
+greeting widget: a time-of-day word 30% (`GREETING_INTL_CHANCE`) of the
+time, an international hello the other 70% (50/50 Chinese vs the rest of
+`GREETING_INTL_HELLOS`), same probabilities and word lists — just drawn
+into this corner's smaller big-band instead of the old column's fixed
+y-position, with no wrapping/truncation (same as the original — every
+combination was already confirmed to fit). Punctuated as "{word},
+{GREETING_NAME}!" (comma after the greeting word, exclamation after the
+name) rather than the original's bare space-separated "{word}
+{GREETING_NAME}" — a deliberate wording change for this corner, not
+carried over from the retired layout. Font sizes are this corner's own
+too: `GREETING_NAME` (`fonts['32']`) reads slightly bigger than the word
+before it (`fonts['24']` for Latin, `cjk_greeting_corner` at 28pt for
+CJK) — the reverse of what `GREETING_INTL_HELLOS`'s own stored
+`font_key` (`'35'`/`cjk_greeting` at 40pt, sized for the old column's
+full width) would give at this corner's scale, so those stored keys are
+only used here to tell CJK words from Latin ones, not for their point
+size.
 
 **`draw_tasks_corner()`** is a compact port of the retired layout's task
 grid, not the filler carousel that used to share its column (that's the
