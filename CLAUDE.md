@@ -1070,15 +1070,47 @@ so it's promoted to a brief full-screen celebration instead, reusing
 `draw_away_message()`'s own auto-fit-font machinery as a placeholder
 until the real `draw_growth_plant()`-based celebration screen is ported in.
 
-### Current state: Tasks corner ported, the other three still placeholders
+### Current state: Tasks and Clock/Greeting ported, the other two still placeholders
 
-`render_screen()` draws the four-corner geometry, with the clock/greeting
-corner's real small/big/small proportions and the top-left corner now
-showing the real Tasks widget (`draw_tasks_corner()`) — Spotify/Weather
-and News/NASA+Calendar are still placeholder boxes. The entire retired
-3-column drawing code is preserved verbatim in `_unused_old_column_layout()`
-(never called) as an implementation reference while porting the rest —
-delete it once every corner has real content.
+`render_screen()` draws the four-corner geometry. Top-left (Tasks,
+`draw_tasks_corner()`) and top-right (Clock ⟷ Greeting) both show real
+content now; Spotify/Weather and News/NASA+Calendar are still placeholder
+boxes. The entire retired 3-column drawing code is preserved verbatim in
+`_unused_old_column_layout()` (never called) as an implementation
+reference while porting the rest — delete it once every corner has real
+content.
+
+All corner content is inset from its own border rectangle by a fixed 8px
+(`pad` in `draw_tasks_corner()`, inline in the clock/greeting block) —
+drawing flush against the border read as cramped/overlapping. Any new
+corner content should do the same.
+
+**`_draw_centered_line()`** centres a single line of text within a box
+using its real ink bbox, same "measure, don't assume a nominal offset"
+convention as `draw_away_message()`. Needed once the clock/greeting
+corner's font size started ranging from a 14pt label up to an 80pt clock
+font depending on state — a fixed pixel offset that centred one badly
+misplaced the other. Shared by both states in that corner; reach for it
+first before hand-rolling a new centring offset in any other corner.
+
+**The clock/greeting corner's two states are two full branches, not a
+shared generic loop.** An earlier version tried to draw all three bands
+(top/mid/bottom) through one loop keyed by font size, but the mid/bottom
+elements need genuinely different treatment per state — the greeting's
+mid line is multi-segment mixed-font (`draw_mixed_text()`), the clock's
+is a single font; the greeting's bottom line wraps to 2 lines
+(affirmation), the clock's is always 1 (date). Fighting the shared
+abstraction to special-case both cost more than just writing two
+explicit branches.
+
+The greeting state's headline is ported unchanged from the retired
+layout's own greeting widget: a time-of-day word 30%
+(`GREETING_INTL_CHANCE`) of the time, an international hello the other
+70% (50/50 Chinese vs the rest of `GREETING_INTL_HELLOS`), same
+probabilities and word lists — just drawn into this corner's smaller
+big-band instead of the old column's fixed y-position, with no
+wrapping/truncation (same as the original — every combination was
+already confirmed to fit).
 
 **`draw_tasks_corner()`** is a compact port of the retired layout's task
 grid, not the filler carousel that used to share its column (that's the
