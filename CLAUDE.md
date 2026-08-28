@@ -225,10 +225,13 @@ line's strikethrough y position comes from that line's own
 `draw.textbbox()` vertical centre rather than a fixed offset, so it lands
 correctly regardless of which font metrics the title text ends up using.
 
-Task titles wrap up to 2 lines (`wrap_lines_limited(..., max_lines=2)`,
-`title_line_h = 26`) rather than truncating to 1 — the row has the
-vertical room for it, and a long title reads better wrapped than
-ellipsised. Due-time strings stay single-line
+Task titles draw at `fonts['20']` (matching the due-time font) rather
+than `fonts['24']` — small enough that most titles fit in one line
+without feeling oversized, while still wrapping up to 2 lines
+(`wrap_lines_limited(..., max_lines=2)`, `title_line_h = 22`) rather than
+truncating to 1 for the ones that don't — the row has the vertical room
+for it, and a long title reads better wrapped than ellipsised. Due-time
+strings stay single-line
 (`wrap_lines_limited(..., max_lines=1)`) since "HH:MM AM/PM" never needs
 more than one. Both are external text like the affirmation line and
 Spotify's artist/track fields, so both are pixel-measured and truncated
