@@ -324,8 +324,10 @@ SPOTIFY_CONF = {
 SPOTIFY_REDIRECT_URI = "https://127.0.0.1"
 # Album art is fetched at this size so the dithering is computed for the
 # widget's actual display size, not upscaled afterwards (which would smear
-# an already-dithered 1-bit image).
-SPOTIFY_ART_SIZE = 190
+# an already-dithered 1-bit image). 130 (down from the old 3-column
+# layout's 190) matches the 7.5" redesign's much smaller bottom-left
+# corner — see draw_spotify_weather_corner().
+SPOTIFY_ART_SIZE = 130
 
 STRAVA_CONF = {
     'TOKEN_FILE': os.path.join(BASE_DIR, 'strava_token.json')
@@ -2686,6 +2688,161 @@ def draw_tasks_corner(draw, rect, fonts, todos):
         draw_rotation_dots(draw, x0, corner_w, dots_y0, TODO_TASK_DOTS_H, page_count, page_idx)
 
 
+def draw_spotify_weather_corner(draw, Himage, rect, fonts, spotify, weather, aqi):
+    """7.5" redesign: bottom-left corner — whichever of Spotify/Weather
+    MIDDLE_COLUMN_WIDGET selects, ported from the retired 3-column widget
+    (_unused_old_column_layout) at a fraction of its old footprint. No
+    overlay logic needed here any more (see CLAUDE.md): the hydration nag
+    moved to the clock/greeting corner and the growth pop-up became a
+    full-screen takeover, so this corner now only ever shows exactly one
+    of Spotify or Weather with nothing drawn on top of it. Takes Himage
+    (not just draw) because the Spotify branch pastes the album art image
+    directly, the same way the retired layout did.
+
+    A small icon+label+divider header (matching draw_tasks_corner()'s own
+    header style) is added here even though the retired layout only drew
+    one for the Spotify slot (Weather's populated state had no header at
+    all) — with MIDDLE_COLUMN_WIDGET now switching the whole corner
+    between the two, a consistent header reads better across corners than
+    carrying that old asymmetry forward."""
+    pad = 8
+    x0, y0, x1, y1 = rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad
+    corner_w, corner_h = x1 - x0, y1 - y0
+
+    header_h = 22
+    header_icon_size = 16
+    if MIDDLE_COLUMN_WIDGET == "weather":
+        header_icon, title_text = "icon_clouds", "WEATHER"
+    else:
+        header_icon, title_text = "icon_spotify", "SPOTIFY"
+    draw_icon(draw, x0, y0, header_icon, (header_icon_size, header_icon_size))
+    bbox = draw.textbbox((0, 0), title_text, font=fonts['14'])
+    title_y = y0 + (header_icon_size - (bbox[3] - bbox[1])) / 2 - bbox[1]
+    draw.text((x0 + header_icon_size + 6, title_y), title_text, font=fonts['14'], fill=0)
+    draw.line((x0, y0 + header_h, x1, y0 + header_h), fill=0, width=1)
+
+    content_top = y0 + header_h + 4
+    content_h = y1 - content_top
+
+    if MIDDLE_COLUMN_WIDGET == "weather" and 'current' in weather:
+        cur = weather['current']
+        temp = cur.get('temperature_2m', 0)
+        hum = cur.get('relative_humidity_2m', 0)
+        w_code = cur.get('weather_code', 0)
+        wind_spd = cur.get('wind_speed_10m', 0)
+        is_day = cur.get('is_day', 1)
+        temp_rounded = math.floor(temp + 0.5)
+
+        icon_size = 50
+        draw_icon(draw, x0, content_top, get_weather_icon(w_code, is_day), (icon_size, icon_size))
+        temp_text = f"{temp_rounded}°C"
+        tb = draw.textbbox((0, 0), temp_text, font=fonts['40'])
+        temp_y = content_top + (icon_size - (tb[3] - tb[1])) / 2 - tb[1]
+        draw.text((x0 + icon_size + 10, temp_y), temp_text, font=fonts['40'], fill=0)
+
+        # Compact text lines replace the retired layout's wind-compass-rose
+        # and big inverted-when-high AQI badge — neither fits this corner's
+        # much smaller footprint, and a glance at the number is all this
+        # slot has room for.
+        stats_x = x0 + icon_size + 10 + text_width(draw, temp_text, fonts['40']) + 16
+        stats = [f"Wind: {wind_spd} km/h", f"Humidity: {hum}%", f"AQI: {aqi}"]
+        stat_line_h = 18
+        stats_y = content_top + max(0, (icon_size - len(stats) * stat_line_h) / 2)
+        for i, line in enumerate(stats):
+            draw.text((stats_x, stats_y + i * stat_line_h), line, font=fonts['14'], fill=0)
+
+        row1_h = icon_size + 10
+        draw.line((x0, content_top + row1_h, x1, content_top + row1_h), fill=0, width=1)
+
+        # Reduced from the retired layout's 4-hour strip to 3 — this
+        # corner has roughly half the width the old middle column had.
+        hourly = weather.get('hourly', {})
+        times = hourly.get('time', [])
+        temps = hourly.get('temperature_2m', [])
+        codes = hourly.get('weather_code', [])
+        cur_iso = datetime.now().strftime("%Y-%m-%dT%H:00")
+        try:
+            start_idx = times.index(cur_iso) + 1
+        except ValueError:
+            start_idx = 0
+
+        forecast_top = content_top + row1_h + 8
+        n_forecast = 3
+        slot_w = corner_w / n_forecast
+        f_icon_size = 36
+        for i in range(n_forecast):
+            idx = start_idx + i
+            if idx < len(times):
+                slot_x = x0 + i * slot_w
+                time_label = times[idx].split('T')[1][:5]
+                tw = text_width(draw, time_label, fonts['14'])
+                draw.text((slot_x + max(0, (slot_w - tw) / 2), forecast_top), time_label, font=fonts['14'], fill=0)
+                draw_icon(draw, int(slot_x + (slot_w - f_icon_size) / 2), int(forecast_top + 20),
+                          get_weather_icon(codes[idx], 1), (f_icon_size, f_icon_size))
+                f_temp = f"{math.floor(temps[idx] + 0.5)}°C"
+                fw = text_width(draw, f_temp, fonts['14'])
+                draw.text((slot_x + max(0, (slot_w - fw) / 2), forecast_top + 20 + f_icon_size + 2),
+                          f_temp, font=fonts['14'], fill=0)
+
+    elif MIDDLE_COLUMN_WIDGET == "weather":
+        # Weather placeholder — the fetch failed or hasn't populated yet.
+        # Same "icon plus centred message" shape as Spotify's "Nothing
+        # Playing" fallback below, so a dead API degrades to a placeholder
+        # instead of leaving the corner blank.
+        icon_size = min(80, int(content_h * 0.5))
+        icon_x = x0 + max(0, (corner_w - icon_size) / 2)
+        icon_y = content_top + max(0, (content_h - icon_size - 24) / 2)
+        draw_icon(draw, int(icon_x), int(icon_y), "icon_clouds", (icon_size, icon_size))
+        msg = "Weather Unavailable"
+        mw = text_width(draw, msg, fonts['20'])
+        draw.text((x0 + max(0, (corner_w - mw) / 2), icon_y + icon_size + 10), msg, font=fonts['20'], fill=0)
+
+    else:
+        # Spotify now-playing (default). Album art on the left, artist/
+        # track to the right — a horizontal layout rather than the retired
+        # layout's stacked art-then-text-then-play-icon, since this corner
+        # is wide and short rather than tall and narrow. The play-icon
+        # overlay is dropped entirely to save vertical space; playing vs.
+        # not is already conveyed by which of the two branches below runs.
+        art_size = SPOTIFY_ART_SIZE
+        art_x = x0
+        art_y = content_top + max(0, (content_h - art_size) / 2)
+        text_x = x0 + art_size + 14
+        text_w = corner_w - art_size - 14
+
+        if spotify.get('status') == 'PLAYING':
+            if spotify.get('cover'):
+                Himage.paste(spotify['cover'], (int(art_x), int(art_y)))
+            else:
+                draw_icon(draw, int(art_x), int(art_y), "icon_spotify", (art_size, art_size))
+
+            # Artist/track names are external (Spotify) text of unpredictable
+            # length, like the affirmation line — pixel-measure and
+            # ellipsis-truncate rather than assume they fit, same helper
+            # used everywhere else in this file for the same reason. They
+            # may also be CJK/Cyrillic (needs_intl_font()) — only
+            # intl_24/intl_28 exist today, no smaller intl size, so a CJK
+            # artist/track here reads a little larger than its Latin
+            # counterpart would at this corner's scale.
+            words = spotify.get('text', '').split(' - ')
+            artist_raw = words[0] if len(words) > 0 else "Unknown"
+            track_raw = words[1] if len(words) > 1 else ""
+            artist_font = fonts['intl_24'] if needs_intl_font(artist_raw) else fonts['20']
+            track_font = fonts['intl_24'] if needs_intl_font(track_raw) else fonts['14']
+            artist = wrap_lines_limited(draw, artist_raw, artist_font, text_w, max_lines=1)[0] if artist_raw else ""
+            track = wrap_lines_limited(draw, track_raw, track_font, text_w, max_lines=1)[0] if track_raw else ""
+
+            if track:
+                half_h = art_size / 2
+                _draw_centered_line(draw, artist, artist_font, text_x, art_y, text_w, half_h)
+                _draw_centered_line(draw, track, track_font, text_x, art_y + half_h, text_w, half_h)
+            else:
+                _draw_centered_line(draw, artist, artist_font, text_x, art_y, text_w, art_size)
+        else:
+            draw_icon(draw, int(art_x), int(art_y), "icon_spotify", (art_size, art_size))
+            _draw_centered_line(draw, "Nothing Playing", fonts['20'], text_x, art_y, text_w, art_size)
+
+
 def render_screen(epd, fonts):
     Himage = Image.new('1', (epd.width, epd.height), 255)
     draw = ImageDraw.Draw(Himage)
@@ -2775,8 +2932,10 @@ def render_screen(epd, fonts):
 
     # Bottom-left: Spotify or Weather — direct port, no overlay needed any
     # more now that the hydration nag moved to the clock/greeting corner
-    # and the growth pop-up is a full-screen takeover above.
-    draw_corner_box(corners['bottom_left'], "SPOTIFY / WEATHER")
+    # and the growth pop-up is a full-screen takeover above. See
+    # draw_spotify_weather_corner().
+    draw.rectangle(corners['bottom_left'], outline=0, width=2)
+    draw_spotify_weather_corner(draw, Himage, corners['bottom_left'], fonts, spotify, weather, aqi)
 
     # Bottom-right: the existing News/NASA + Calendar carousel, ported
     # unchanged — Greeting and Email moved out to the clock corner below,

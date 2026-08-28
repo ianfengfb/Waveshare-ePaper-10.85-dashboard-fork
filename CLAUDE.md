@@ -470,9 +470,15 @@ via `/api/widget-config` (see roadmap) the same way `EMAIL_PROVIDER` is.
 `render_screen()`'s column-2 block picks between the two with
 `elif MIDDLE_COLUMN_WIDGET == "weather": ... else: <Spotify>` — Weather's
 drawing code is untouched, just gated behind the switch. `SPOTIFY_ART_SIZE`
-(currently 190px) controls the album-art fetch/display size in one place —
-the fetch code (`fetch_spotify_data()`) resizes to this before dithering, since
-upscaling an already-dithered 1-bit image afterwards would smear it.
+controls the album-art fetch/display size in one place — the fetch code
+(`fetch_spotify_data()`) resizes to this before dithering, since upscaling
+an already-dithered 1-bit image afterwards would smear it. This whole
+"middle column" section documents the retired 3-column layout
+(`_unused_old_column_layout()`, no longer drawn) — on the current
+7.5" corner layout, `MIDDLE_COLUMN_WIDGET` instead switches the bottom-left
+corner via `draw_spotify_weather_corner()`, and `SPOTIFY_ART_SIZE` is 130px
+to match that corner's smaller footprint; see the "7.5" redesign" section
+below for the current code.
 
 Uses Spotify's own Web API (`/v1/me/player/currently-playing`), not
 Last.fm — see `auth_spotify()`/`fetch_spotify_data()`. One-time OAuth via
@@ -1070,15 +1076,15 @@ so it's promoted to a brief full-screen celebration instead, reusing
 `draw_away_message()`'s own auto-fit-font machinery as a placeholder
 until the real `draw_growth_plant()`-based celebration screen is ported in.
 
-### Current state: Tasks and Clock/Greeting ported, the other two still placeholders
+### Current state: three corners ported, News/NASA+Calendar still a placeholder
 
 `render_screen()` draws the four-corner geometry. Top-left (Tasks,
-`draw_tasks_corner()`) and top-right (Clock ⟷ Greeting) both show real
-content now; Spotify/Weather and News/NASA+Calendar are still placeholder
-boxes. The entire retired 3-column drawing code is preserved verbatim in
-`_unused_old_column_layout()` (never called) as an implementation
-reference while porting the rest — delete it once every corner has real
-content.
+`draw_tasks_corner()`), top-right (Clock ⟷ Greeting), and bottom-left
+(Spotify/Weather, `draw_spotify_weather_corner()`) all show real content
+now; News/NASA+Calendar is still a placeholder box. The entire retired
+3-column drawing code is preserved verbatim in `_unused_old_column_layout()`
+(never called) as an implementation reference while porting the rest —
+delete it once every corner has real content.
 
 All corner content is inset from its own border rectangle by a fixed 8px
 (`pad` in `draw_tasks_corner()`, inline in the clock/greeting block) —
@@ -1155,6 +1161,45 @@ row actually gets *more* height than before (row height is no longer
 shared three ways), so the 2-line title wrap, completed-task
 strikethrough, and pagination dots all carry over unchanged from the
 retired widget's own logic — only the geometry and page size changed.
+
+**`draw_spotify_weather_corner()`** ports whichever of Spotify/Weather
+`MIDDLE_COLUMN_WIDGET` selects into the bottom-left corner — the simplest
+of the three ported so far, since it needs no overlay logic at all any
+more (the hydration nag moved to the clock/greeting corner's small band,
+and the growth pop-up became a full-screen takeover — see above), unlike
+the retired 3-column version of this widget which had to make room for
+both. Adds a small icon+label+divider header (matching
+`draw_tasks_corner()`'s own style) for *both* sub-widgets, even though the
+retired layout only ever drew one for the Spotify slot (Weather's
+populated state had no header at all there) — with one corner now
+switching between the two, a consistent header across both states reads
+better than carrying that old asymmetry forward.
+
+Weather's populated state drops the retired layout's wind-compass-rose
+and big inverted-when-high AQI badge entirely, replacing both with plain
+compact text lines (`Wind: ... km/h` / `Humidity: ...%` / `AQI: ...`) next
+to the icon+temperature — neither the compass rose nor the AQI badge fit
+this corner's much smaller footprint, and a number in text is all the
+space allows. The 4-hour forecast strip is reduced to 3 hours, since this
+corner has roughly half the width the old middle column had. Weather's
+unpopulated state keeps the retired layout's "icon plus centred message"
+placeholder (`icon_clouds` + "Weather Unavailable"), just resized down.
+
+Spotify's playing state switches from the retired layout's stacked
+art-then-text-then-play-icon-overlay to a horizontal layout — album art on
+the left, artist/track to the right — since this corner is wide and short
+rather than tall and narrow; the play-icon overlay is dropped entirely to
+save vertical space; it added no information the two branches (playing vs.
+"Nothing Playing") don't already convey. `SPOTIFY_ART_SIZE` shrank from
+190 (the old column's size) to 130 to fit — changed in place rather than
+adding a parallel constant, since it directly controls the size
+`fetch_spotify_data()` fetches and dithers album art at (see its comment):
+dithering at the final display size and changing that size in one place
+avoids ever re-resizing an already-dithered 1-bit image, which would
+smear it. Artist/track text reuses `needs_intl_font()` the same way the
+retired layout did, with the same caveat noted there: only `intl_24`/
+`intl_28` sizes exist today, no smaller intl variant, so a CJK artist/
+track name here reads a little larger than a same-length Latin one would.
 
 No real 7.5" driver is vendored yet (no specific model/hardware revision
 chosen and received) — `render_preview.py` still targets the old 10.85"
