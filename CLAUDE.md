@@ -1076,18 +1076,26 @@ so it's promoted to a brief full-screen celebration instead, reusing
 `draw_away_message()`'s own auto-fit-font machinery as a placeholder
 until the real `draw_growth_plant()`-based celebration screen is ported in.
 
-### Current state: all four corners ported
+### Current state: all four corners ported, retired layout deleted
 
 `render_screen()` draws the four-corner geometry, and every corner now
 shows real content: top-left (Tasks, `draw_tasks_corner()`), top-right
 (Clock ⟷ Greeting), bottom-left (Spotify/Weather,
 `draw_spotify_weather_corner()`), and bottom-right (News/NASA + Calendar,
-`draw_news_calendar_corner()`). The entire retired 3-column drawing code
-is still preserved verbatim in `_unused_old_column_layout()` (never
-called) as an implementation reference — now that every corner has real
-content, the condition CLAUDE.md previously flagged for deleting it is
-met; that deletion just hasn't happened yet (it's a large, separate diff
-from porting the corners themselves).
+`draw_news_calendar_corner()`). The retired 3-column drawing code
+(`_unused_old_column_layout()`) has been deleted now that every corner it
+was a reference for has real content — along with `TODO_TASKS_PER_PAGE`
+and `draw_sparkline()`, both of which had no caller left once that
+function was gone (`TODO_CORNER_TASKS_PER_PAGE` is the only page-size
+constant now; the retired 3-column layout's own comments explaining *why*
+it was a separate constant were rewritten to stop referring to deleted
+code). Nothing else lost its last caller in the same pass — `weather`/
+`spotify`/`todos`/etc. are still real `render_screen()` locals feeding the
+four corner functions, and `draw_growth_plant()` is deliberately still
+here despite having no caller yet: it's the *planned* real content for
+the hydration/growth full-screen takeover (currently a
+`draw_away_message()` placeholder — see the `TODO(7.5in-redesign)`
+comment above), not retired code.
 
 All corner content is inset from its own border rectangle by a fixed 8px
 (`pad` in `draw_tasks_corner()`, inline in the clock/greeting block) —
