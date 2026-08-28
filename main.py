@@ -2584,16 +2584,21 @@ def render_screen(epd, fonts):
 
                     # Task titles will eventually be arbitrary text from the
                     # companion app's API — same "unpredictable external text"
-                    # category as artist/track names and the affirmation line,
-                    # so truncate in pixels rather than assume they fit.
-                    title = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=1)
-                    title = title[0] if title else ''
-                    draw.text((title_x, row_y), title, font=fonts['24'], fill=0)
-                    if completed and title:
-                        tw = text_width(draw, title, fonts['24'])
-                        bbox = draw.textbbox((title_x, row_y), title, font=fonts['24'])
-                        strike_y = (bbox[1] + bbox[3]) / 2
-                        draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
+                    # category as artist/track names and the affirmation line.
+                    # The row has room for a second line, so wrap up to 2
+                    # rather than truncating a long title to 1 — pixel-wrapped
+                    # since it's still unpredictable external text, same
+                    # reasoning as before, just with more room to work with.
+                    title_lines = wrap_lines_limited(draw, task.get('title', ''), fonts['24'], title_max_w, max_lines=2)
+                    title_line_h = 26
+                    for li, line in enumerate(title_lines):
+                        line_y = row_y + li * title_line_h
+                        draw.text((title_x, line_y), line, font=fonts['24'], fill=0)
+                        if completed and line:
+                            tw = text_width(draw, line, fonts['24'])
+                            bbox = draw.textbbox((title_x, line_y), line, font=fonts['24'])
+                            strike_y = (bbox[1] + bbox[3]) / 2
+                            draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
 
                     due = task.get('due')
                     if due:

@@ -218,19 +218,24 @@ mixes completed and not.
 
 A completed task draws a filled checkbox (rather than the default outline)
 with a light checkmark cut into it via two white lines, plus a strikethrough
-through the title — both cues together rather than either alone, since a
-filled checkbox alone doesn't read as "done" at e-ink's low contrast and a
-strikethrough alone is easy to miss at a glance. The strikethrough's y
-position comes from the title's own `draw.textbbox()` vertical centre
-rather than a fixed offset, so it lands correctly regardless of which font
-metrics the title text ends up using.
+through each line of the title — both cues together rather than either
+alone, since a filled checkbox alone doesn't read as "done" at e-ink's low
+contrast and a strikethrough alone is easy to miss at a glance. Each
+line's strikethrough y position comes from that line's own
+`draw.textbbox()` vertical centre rather than a fixed offset, so it lands
+correctly regardless of which font metrics the title text ends up using.
 
-Task titles and due-time strings are external text like the affirmation
-line and Spotify's artist/track fields — `wrap_lines_limited(..., max_lines=1)`
-truncates each independently in pixels rather than assuming they fit,
-same helper, same reasoning. The due-time column budget (100px) is sized
-off measuring a real "HH:MM AM/PM" string (~94px at `fonts['20']`), not a
-round number — an untested guess here undercounted it once already.
+Task titles wrap up to 2 lines (`wrap_lines_limited(..., max_lines=2)`,
+`title_line_h = 26`) rather than truncating to 1 — the row has the
+vertical room for it, and a long title reads better wrapped than
+ellipsised. Due-time strings stay single-line
+(`wrap_lines_limited(..., max_lines=1)`) since "HH:MM AM/PM" never needs
+more than one. Both are external text like the affirmation line and
+Spotify's artist/track fields, so both are pixel-measured and truncated
+independently rather than assuming they fit, same helper, same reasoning.
+The due-time column budget (100px) is sized off measuring a real
+"HH:MM AM/PM" string (~94px at `fonts['20']`), not a round number — an
+untested guess here undercounted it once already.
 
 **Two distinct placeholders, not one.** `render_screen()` checks
 `todos is None` before `not todos`: a centred `icon_disconnected` plus
