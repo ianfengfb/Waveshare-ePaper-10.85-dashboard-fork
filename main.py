@@ -2764,8 +2764,11 @@ def render_screen(epd, fonts):
     # Clock state and a Greeting state, each with its own small/big/small
     # internal layout (see CLAUDE.md). Sketched in more detail here since
     # its proportions are worth validating before porting real content.
-    x0, y0, x1, y1 = corners['top_right']
-    draw.rectangle((x0, y0, x1, y1), outline=0, width=2)
+    draw.rectangle(corners['top_right'], outline=0, width=2)
+    # Inset from the border like draw_tasks_corner() — content flush
+    # against it reads as cramped/overlapping at this resolution.
+    tr_x0, tr_y0, tr_x1, tr_y1 = corners['top_right']
+    x0, y0, x1, y1 = tr_x0 + 8, tr_y0 + 8, tr_x1 - 8, tr_y1 - 8
     corner_w, corner_h = x1 - x0, y1 - y0
     small_h, big_h = corner_h * 0.22, corner_h * 0.56
 
