@@ -2585,8 +2585,17 @@ def draw_tasks_corner(draw, rect, fonts, todos):
     corner_w, corner_h = x1 - x0, y1 - y0
 
     header_h = 22
-    draw_icon(draw, x0, y0 + 1, "icon_task", (16, 16))
-    draw.text((x0 + 24, y0), "TASKS", font=fonts['14'], fill=0)
+    header_icon_size = 16
+    title_text = "TASKS OF THE DAY"
+    draw_icon(draw, x0, y0, "icon_task", (header_icon_size, header_icon_size))
+    # Centre the title's actual ink bbox on the icon's vertical centre —
+    # matching y coordinates don't mean matching visual centres, since
+    # fonts['14']'s ink starts a few px below the y passed to draw.text()
+    # (same pitfall called out elsewhere in this file, e.g. the retired
+    # layout's "y=20 not 15" comment for the old TASKS OF THE DAY header).
+    bbox = draw.textbbox((0, 0), title_text, font=fonts['14'])
+    title_y = y0 + (header_icon_size - (bbox[3] - bbox[1])) / 2 - bbox[1]
+    draw.text((x0 + header_icon_size + 6, title_y), title_text, font=fonts['14'], fill=0)
     draw.line((x0, y0 + header_h, x1, y0 + header_h), fill=0, width=1)
 
     content_top = y0 + header_h + 4
