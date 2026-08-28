@@ -2819,23 +2819,40 @@ def render_screen(epd, fonts):
         _draw_centered_line(draw, date_label, fonts['14'], x0, y0 + small_h + big_h, corner_w, small_h)
 
     else:
-        top_label = "Drink water!" if hydration_alert else f"Mail: {email_unread_today}"
-        _draw_centered_line(draw, top_label, fonts['14'], x0, y0, corner_w, small_h)
+        # Icon + text, matching the retired layout's own email
+        # (icon_mail + "Unread Today: N") and hydration nag
+        # (icon_droplet + "Haven't had water...") widgets — plain text
+        # alone lost that visual language when this first got ported in.
+        if hydration_alert:
+            icon_name, top_label = "icon_droplet", "Haven't had water in a while!"
+        else:
+            icon_name, top_label = "icon_mail", f"Unread Today: {email_unread_today}"
+        icon_size, icon_gap = 16, 6
+        top_label = wrap_lines_limited(draw, top_label, fonts['14'], corner_w - icon_size - icon_gap, max_lines=1)[0]
+        label_w = text_width(draw, top_label, fonts['14'])
+        group_x = x0 + max(0, (corner_w - icon_size - icon_gap - label_w) / 2)
+        draw_icon(draw, int(group_x), int(y0 + (small_h - icon_size) / 2), icon_name, (icon_size, icon_size))
+        _draw_centered_line(draw, top_label, fonts['14'], group_x + icon_size + icon_gap, y0, label_w, small_h)
 
-        # Multi-language rotating greeting, ported unchanged from the
-        # retired 3-column layout (_unused_old_column_layout): a
-        # time-of-day word 30% of the time, an international "hello"
-        # (50/50 Chinese vs the rest of GREETING_INTL_HELLOS) the other
-        # 70% — same probabilities, same word lists, just drawn into this
-        # corner's smaller big-band instead of the old column's fixed
-        # y-position. Not wrapped/truncated, same as the original: every
-        # combination was already confirmed to fit its target width.
+        # Multi-language rotating greeting, ported from the retired
+        # 3-column layout (_unused_old_column_layout): a time-of-day word
+        # 30% of the time, an international "hello" (50/50 Chinese vs the
+        # rest of GREETING_INTL_HELLOS) the other 70% — same
+        # probabilities, same word lists. Font sizes are this corner's
+        # own, not the list's stored ones (those were tuned for the old
+        # column's full width): GREETING_NAME reads slightly bigger than
+        # the word before it, the opposite of what GREETING_INTL_HELLOS's
+        # own '35'/cjk_greeting sizes would give at this corner's scale.
+        # Not wrapped/truncated, same as the original: every combination
+        # was already confirmed to fit its target width.
         if random.random() < GREETING_INTL_CHANCE:
             if random.random() < GREETING_ZH_CHANCE:
-                word, font_key = GREETING_ZH_HELLO, 'cjk_greeting'
+                word, is_cjk = GREETING_ZH_HELLO, True
             else:
-                word, font_key = random.choice(GREETING_INTL_HELLOS)
-            segments = [(word, fonts[font_key]), (" ", fonts['28'])]
+                word, list_font_key = random.choice(GREETING_INTL_HELLOS)
+                is_cjk = (list_font_key == 'cjk_greeting')
+            word_font = fonts['cjk_greeting_corner'] if is_cjk else fonts['24']
+            segments = [(word, word_font), (" ", fonts['24'])]
         else:
             dt = datetime.now()
             if dt.hour < 12:
@@ -2844,8 +2861,8 @@ def render_screen(epd, fonts):
                 time_word = "Afternoon"
             else:
                 time_word = "Evening"
-            segments = [(f"{time_word} ", fonts['28'])]
-        segments.append((GREETING_NAME, fonts['28']))
+            segments = [(f"{time_word} ", fonts['24'])]
+        segments.append((GREETING_NAME, fonts['32']))
 
         seg_w = sum(text_width(draw, t, f) for t, f in segments)
         draw_mixed_text(draw, x0 + max(0, (corner_w - seg_w) / 2), y0 + small_h + big_h / 2, segments)
@@ -3641,6 +3658,11 @@ def load_fonts():
         # Latin text next to it rather than dwarfing it.
         'clock_corner': load_font('advanced_led_board-7.ttc', 80),
         'cjk_small': load_font('CJK-Greeting.ttf', 18),
+        # The greeting headline's CJK word ("嗨"/"こんにちは") needs its own
+        # corner-sized instance too — cjk_greeting (40pt) is sized for the
+        # retired layout's full column width, too big next to the smaller
+        # GREETING_NAME size this corner uses (see render_screen()).
+        'cjk_greeting_corner': load_font('CJK-Greeting.ttf', 28),
         'cjk_greeting': load_font('CJK-Greeting.ttf', 40),
         'intl_24': load_font('CJK-Cyrillic-Spotify.ttf', 24),
         'intl_28': load_font('CJK-Cyrillic-Spotify.ttf', 28),
