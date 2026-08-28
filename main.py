@@ -177,6 +177,17 @@ GREETING_FALLBACK_AFFIRMATIONS = [
     "You've got this, one step at a time.",
 ]
 
+# 7.5" redesign: how often the top-right corner's Clock state and Greeting
+# state trade places. Weighted 2:1 in Clock's favour (see clock_showing in
+# render_screen()) so the clock — the thing you actually glance at this
+# corner to check — stays up most of the time, with the greeting popping
+# in briefly and periodically rather than splitting the time evenly the
+# way the news/calendar carousel does. A shorter value would just mean
+# more, smaller jumps rather than a smoother transition, since the display
+# only changes on an actual redraw — same reasoning as every other
+# rotation cadence in this file.
+CLOCK_GREETING_ROTATE_SECONDS = 60
+
 # --- TASKS WIDGET ---
 # How many task rows the widget shows at once — fixed, regardless of how
 # many real tasks come back, so both this widget's height and the filler
@@ -2581,6 +2592,123 @@ def render_screen(epd, fonts):
         draw_away_message(draw, epd.width, epd.height, away_message['message'])
         return Himage
 
+    water_last_logged_at = water.get('last_logged_at')
+    show_water = (
+        ENABLE_WATER and water_last_logged_at is not None
+        and (time.time() - water_last_logged_at) < WATER_SHOW_SECONDS
+    )
+    if show_water:
+        # Full-screen celebration takeover — replaces the whole 4-corner
+        # dashboard below while active, same shape as the away-message
+        # takeover above. Promoted from a corner overlay (its old home in
+        # the 3-column/10.85" layout) to full-screen: it's rare enough
+        # (at most a handful of times a day) that reserving a permanent
+        # corner for it year-round would be wasteful — see CLAUDE.md's
+        # 7.5" redesign notes.
+        # TODO(7.5in-redesign): replace this placeholder with the real
+        # draw_growth_plant()-based celebration screen, ported from the
+        # old middle-column overlay below.
+        draw_away_message(draw, epd.width, epd.height, "Stay Hydrated!")
+        return Himage
+
+    # Mutually exclusive with show_water in practice (that needs a log
+    # within the last minute; this needs one missing for hours), but
+    # excluded explicitly anyway so a fresh log's celebration always wins
+    # the redraw it first appears on.
+    hydration_alert = (
+        ENABLE_WATER and not show_water
+        and _hydration_alert_active(water_last_logged_at)
+    )
+
+    # --- 7.5" REDESIGN: four-corner layout (replaces the old 3-column one) ---
+    # SKELETON ONLY at this stage: placeholder boxes + labels to validate
+    # the corner geometry before porting real widget content into each
+    # one. See CLAUDE.md for the full corner-by-corner design writeup.
+    margin, gutter = 16, 8
+    mid_x, mid_y = epd.width // 2, epd.height // 2
+
+    corners = {
+        'top_left':     (margin, margin, mid_x - gutter, mid_y - gutter),
+        'top_right':    (mid_x + gutter, margin, epd.width - margin, mid_y - gutter),
+        'bottom_left':  (margin, mid_y + gutter, mid_x - gutter, epd.height - margin),
+        'bottom_right': (mid_x + gutter, mid_y + gutter, epd.width - margin, epd.height - margin),
+    }
+
+    def draw_corner_box(rect, label):
+        x0, y0, x1, y1 = rect
+        draw.rectangle((x0, y0, x1, y1), outline=0, width=2)
+        tw = text_width(draw, label, fonts['20'])
+        draw.text((x0 + max(0, (x1 - x0 - tw) / 2), y0 + (y1 - y0) / 2 - 12), label, font=fonts['20'], fill=0)
+
+    # Top-left: Tasks — direct port of the existing TODO_TASKS_PER_PAGE
+    # grid + filler carousel, unchanged logic, just retuned geometry.
+    draw_corner_box(corners['top_left'], "TASKS")
+
+    # Bottom-left: Spotify or Weather — direct port, no overlay needed any
+    # more now that the hydration nag moved to the clock/greeting corner
+    # and the growth pop-up is a full-screen takeover above.
+    draw_corner_box(corners['bottom_left'], "SPOTIFY / WEATHER")
+
+    # Bottom-right: the existing News/NASA + Calendar carousel, ported
+    # unchanged — Greeting and Email moved out to the clock corner below,
+    # so this is nearly identical to today's filler carousel.
+    draw_corner_box(corners['bottom_right'], "NEWS / NASA + CALENDAR")
+
+    # Top-right: the most structurally novel corner — rotates between a
+    # Clock state and a Greeting state, each with its own small/big/small
+    # internal layout (see CLAUDE.md). Sketched in more detail here since
+    # its proportions are worth validating before porting real content.
+    x0, y0, x1, y1 = corners['top_right']
+    draw.rectangle((x0, y0, x1, y1), outline=0, width=2)
+    corner_w, corner_h = x1 - x0, y1 - y0
+    small_h, big_h = corner_h * 0.22, corner_h * 0.56
+
+    clock_showing = int(time.time() // CLOCK_GREETING_ROTATE_SECONDS) % 3 != 0
+
+    if clock_showing:
+        # "嗨" is CJK — Aldrich (fonts['14']) has no glyph for it and would
+        # silently draw nothing (see CLAUDE.md's "Adding a CJK glyph"
+        # section), so this segment specifically needs the small bundled
+        # CJK subset font, mixed with Aldrich for the Latin name via
+        # draw_mixed_text() rather than a single wrap_lines_limited() call.
+        top_segments = [("嗨 ", fonts['cjk_greeting']), (f"{GREETING_NAME}!", fonts['14'])]
+        mid_label = datetime.now().strftime("%H:%M")
+        bot_label = datetime.now().strftime("%a %d %b")
+    else:
+        top_segments = None
+        top_label = "Drink water!" if hydration_alert else f"Mail: {email_unread_today}"
+        # TODO(7.5in-redesign): port the real multi-language greeting
+        # rotation (draw_mixed_text(), GREETING_INTL_HELLOS, etc.) here —
+        # placeholder text below just validates the corner's proportions.
+        mid_label = f"Hei {GREETING_NAME}"
+        bot_label = affirmation
+
+    y = y0
+    if top_segments is not None:
+        seg_w = sum(text_width(draw, t, f) for t, f in top_segments)
+        draw_mixed_text(draw, x0 + max(0, (corner_w - seg_w) / 2), y + small_h / 2, top_segments)
+    else:
+        label = wrap_lines_limited(draw, top_label, fonts['14'], corner_w - 8, max_lines=1)[0]
+        tw = text_width(draw, label, fonts['14'])
+        draw.text((x0 + max(0, (corner_w - tw) / 2), y + max(0, (small_h - 24) / 2)), label, font=fonts['14'], fill=0)
+    y += small_h
+
+    for label, h, font_key in ((mid_label, big_h, '28'), (bot_label, small_h, '14')):
+        label = wrap_lines_limited(draw, label, fonts[font_key], corner_w - 8, max_lines=1)[0]
+        tw = text_width(draw, label, fonts[font_key])
+        draw.text((x0 + max(0, (corner_w - tw) / 2), y + max(0, (h - 24) / 2)), label, font=fonts[font_key], fill=0)
+        y += h
+
+    return Himage
+
+
+def _unused_old_column_layout(epd, fonts, draw, Himage, todos, news_headlines, nasa_apod, calendar_events,
+                               weather, aqi, spotify, water, email_unread_today, affirmation,
+                               strava, printer, rob, claude, antigravity, codex, sysload, crypto, ping):
+    """Retired 10.85"/3-column drawing code, kept only as an implementation
+    reference while the 7.5" four-corner redesign is being built (see
+    render_screen() above and CLAUDE.md) — not called from anywhere.
+    Delete once every corner above has real content ported in."""
     col_w = epd.width // 3
 
     # --- COLUMN 1 (Widgets, or Tasks) ---

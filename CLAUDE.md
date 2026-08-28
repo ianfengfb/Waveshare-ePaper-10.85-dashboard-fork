@@ -991,6 +991,103 @@ every subsequent 15s poll until she presses it again. Polled at the same
 15s cadence as `away_message`, for the same reason — this is meant to
 take effect right away, not sit waiting on a slower interval.
 
+## 7.5" redesign (in progress, on `feature/7.5-inch-redesign`)
+
+The 10.85" panel this project was originally built for is discontinued, and
+the replacement Waveshare shipped instead (a 4-color "G" variant, SKU 29792)
+turned out to have no partial refresh support at all — full-refresh-only on
+an e-ink panel would mean every ~60s redraw visibly flashes the whole
+screen and burns through the panel's rated refresh-cycle lifetime far
+faster than this project's original design assumed. Rather than adapt to
+that, the plan is to move to a **7.5" panel** (800×480) — smaller, but a
+same-architecture SPI-command driver (same family as the retired 10.85"
+one) with genuine partial refresh and an already-solved 3D-printable case.
+
+**Same repo, not a new one** — everything outside rendering/the driver
+(every companion-app fetch function, `update_data_thread`, auth flows,
+`data_store`, the `render_preview.py` testing workflow) is completely
+independent of which physical panel is attached, so there's nothing to
+gain from starting fresh elsewhere. The repo's name will stop matching the
+hardware once this lands; that's a cosmetic rename to do separately,
+unrelated to this branch.
+
+### Layout: four corners, not three columns
+
+800×480 is a much more square-ish aspect ratio than 1360×480's wide strip,
+so the old three-column layout doesn't carry over — the screen is instead
+split into four corners (top-left/top-right/bottom-left/bottom-right,
+divided by a `margin`/`gutter`-based cross through the centre). Rather
+than dropping any of the original 3-column-plus-overlays feature set, each
+corner either hosts one widget directly or becomes a rotating carousel
+absorbing several lower-priority ones — an extension of the same
+wall-clock-derived rotation pattern (`int(time.time() // N) % count`)
+the filler carousel and task pagination already use elsewhere in this
+file, not a new mechanism.
+
+**Corner assignments:**
+- **Top-left — Tasks.** Direct port of the existing `TODO_TASKS_PER_PAGE`
+  grid + filler carousel, unchanged logic, retuned geometry.
+- **Bottom-left — Spotify or Weather.** Direct port, and actually
+  *simpler* than before: it no longer needs an overlay at all, since the
+  hydration nag moved to the clock/greeting corner and the growth pop-up
+  became a full-screen takeover (see below).
+- **Bottom-right — News/NASA + Calendar.** The existing filler carousel,
+  ported essentially unchanged — Greeting and Email moved out to the
+  clock corner, so nothing new joins this rotation.
+- **Top-right — Clock ⟷ Greeting**, the most structurally novel corner:
+  two states, each a small/big/small vertical stack, trading places on
+  `CLOCK_GREETING_ROTATE_SECONDS` weighted 2:1 toward Clock (`int(time.time()
+  // CLOCK_GREETING_ROTATE_SECONDS) % 3 != 0`) since the clock is the thing
+  actually glanced at most, not something to split evenly like the
+  news/calendar carousel does.
+  - *Clock state:* small fixed `"嗨 {GREETING_NAME}!"` signature line on
+    top, big time, small date on the bottom.
+  - *Greeting state:* small email-unread-count on top (swapping to a
+    "Drink water!" nag when `hydration_alert` is true — the two are
+    mutually exclusive, condition-driven, not timed), big **today's
+    existing multi-language rotating greeting** (unchanged — still
+    "Hei Charlotte" / "こんにちは..." / etc. once ported, not yet wired
+    into the skeleton), small affirmation line on the bottom.
+  - The net effect: her name (in one form or another) is on screen in
+    *every* normal-dashboard render, and only disappears during the two
+    full-screen takeover modes below.
+  - The fixed "嗨" signature needed `draw_mixed_text()` (mixing the small
+    bundled `fonts['cjk_greeting']` subset font with Aldrich for the
+    Latin half), not a single `wrap_lines_limited()` call — Aldrich has
+    no CJK glyphs and silently draws nothing for them (same pitfall as
+    the "Adding a CJK glyph" section above); this bit it during the
+    skeleton's first render and was caught by actually looking at the
+    output PNG, not by inspection.
+
+**Two full-screen takeover modes, checked in priority order before any
+corner draws:** away message (existing, `draw_away_message()` — already
+fully resolution-agnostic, needed zero changes for the new panel size)
+takes priority over the hydration growth pop-up, which is **new** as a
+full-screen mode — it used to overlay the middle column in the 3-column
+layout, but at "happens a handful of times a day at most" frequency,
+dedicating a permanent corner to it year-round would have been wasteful,
+so it's promoted to a brief full-screen celebration instead, reusing
+`draw_away_message()`'s own auto-fit-font machinery as a placeholder
+until the real `draw_growth_plant()`-based celebration screen is ported in.
+
+### Current state: skeleton only
+
+`render_screen()` now draws the four-corner geometry with placeholder
+boxes/labels (and the clock/greeting corner's real small/big/small
+proportions) — enough to validate the layout visually via a mocked
+800×480 `EPD` before porting real widget content into each corner. The
+entire retired 3-column drawing code is preserved verbatim in
+`_unused_old_column_layout()` (never called) as an implementation
+reference while porting — delete it once every corner has real content.
+
+No real 7.5" driver is vendored yet (no specific model/hardware revision
+chosen and received) — `render_preview.py` still targets the old 10.85"
+mock dimensions and hasn't been touched. The 800×480 mock used to validate
+the skeleton so far lives only in an ad hoc test script, not in the repo;
+wiring the real driver + updating `render_preview.py`'s mock to match is
+its own later step (needs the actual panel in hand to pick the right
+driver file and confirm GPIO pins).
+
 ## Roadmap (not yet built — one session per item)
 
 These are planned follow-ups; each is its own scoped session. Keep the
