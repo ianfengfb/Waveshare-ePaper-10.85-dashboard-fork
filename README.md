@@ -285,6 +285,10 @@ This forces every currently-enabled data source to re-fetch on its very next pas
 second) — the same full-refresh behaviour `render_preview.py` always gets, just triggered on demand
 against the live process instead of only at startup.
 
+Charlotte can trigger the same thing herself from the companion app, without needing SSH access —
+whatever button the app exposes for it calls `POST /api/force-refresh`, which the Pi polls every 15
+seconds (same `waveshare_api_config.json` every other companion-app endpoint already uses).
+
 ## How It Works
 
 The dashboard is built on a robust, multi-threaded architecture designed to keep the UI responsive and prevent hardware lockups.
