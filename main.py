@@ -2789,7 +2789,11 @@ def render_screen(epd, fonts):
         # section), so this segment specifically needs the small bundled
         # CJK subset font, mixed with Aldrich for the Latin name via
         # draw_mixed_text() rather than a single wrap_lines_limited() call.
-        top_segments = [("嗨 ", fonts['cjk_greeting']), (f"{GREETING_NAME}!", fonts['14'])]
+        # cjk_small (not cjk_greeting, which is sized for the big greeting
+        # headline) keeps this signature line visually matched to the
+        # small Latin text next to it rather than dwarfing it.
+        top_segments = [("嗨 ", fonts['cjk_small']), (f"{GREETING_NAME}!", fonts['14'])]
+        mid_font_key = 'clock_corner'
         mid_label = datetime.now().strftime("%H:%M")
         bot_label = datetime.now().strftime("%a %d %b")
     else:
@@ -2798,6 +2802,7 @@ def render_screen(epd, fonts):
         # TODO(7.5in-redesign): port the real multi-language greeting
         # rotation (draw_mixed_text(), GREETING_INTL_HELLOS, etc.) here —
         # placeholder text below just validates the corner's proportions.
+        mid_font_key = '28'
         mid_label = f"Hei {GREETING_NAME}"
         bot_label = affirmation
 
@@ -2811,10 +2816,18 @@ def render_screen(epd, fonts):
         draw.text((x0 + max(0, (corner_w - tw) / 2), y + max(0, (small_h - 24) / 2)), label, font=fonts['14'], fill=0)
     y += small_h
 
-    for label, h, font_key in ((mid_label, big_h, '28'), (bot_label, small_h, '14')):
+    for label, h, font_key in ((mid_label, big_h, mid_font_key), (bot_label, small_h, '14')):
         label = wrap_lines_limited(draw, label, fonts[font_key], corner_w - 8, max_lines=1)[0]
-        tw = text_width(draw, label, fonts[font_key])
-        draw.text((x0 + max(0, (corner_w - tw) / 2), y + max(0, (h - 24) / 2)), label, font=fonts[font_key], fill=0)
+        # Real ink bbox, not a fixed nominal offset — mid_font_key ranges
+        # from a small 14pt label to an 80pt clock font depending on
+        # state, and a fixed offset tuned for one badly misplaces the
+        # other (same "measure, don't assume" convention used throughout
+        # this file, e.g. draw_away_message()'s centring).
+        bbox = draw.textbbox((0, 0), label, font=fonts[font_key])
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        text_x = x0 + max(0, (corner_w - tw) / 2) - bbox[0]
+        text_y = y + max(0, (h - th) / 2) - bbox[1]
+        draw.text((text_x, text_y), label, font=fonts[font_key], fill=0)
         y += h
 
     return Himage
@@ -3588,6 +3601,14 @@ def load_fonts():
         '60': load_font('Aldrich-Regular.ttc', 60),
         '80': load_font('Aldrich-Regular.ttc', 80),
         'clock': load_font('advanced_led_board-7.ttc', 180),
+        # 7.5" redesign: the clock/greeting corner's time and its fixed
+        # "嗨" signature line both need sizes far smaller than the
+        # originals above (tuned for the old 10.85" canvas) — a scaled
+        # version of the same clock font for the corner's much smaller
+        # "big" band, and a CJK size that visually matches fonts['14']'s
+        # Latin text next to it rather than dwarfing it.
+        'clock_corner': load_font('advanced_led_board-7.ttc', 80),
+        'cjk_small': load_font('CJK-Greeting.ttf', 18),
         'cjk_greeting': load_font('CJK-Greeting.ttf', 40),
         'intl_24': load_font('CJK-Cyrillic-Spotify.ttf', 24),
         'intl_28': load_font('CJK-Cyrillic-Spotify.ttf', 28),
