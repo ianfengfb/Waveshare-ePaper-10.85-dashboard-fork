@@ -650,7 +650,7 @@ class DataStore:
             'claude': 0, 'antigravity': 0, 'codex': 0, 'affirmation': 0,
             'todos': 0, 'widget_config': 0, 'water': 0, 'news_headlines': 0,
             'nasa_apod': 0, 'away_message': 0, 'system_status': 0,
-            'calendar_events': 0
+            'calendar_events': 0, 'force_refresh': 0
         }
 
 
@@ -672,20 +672,24 @@ def force_refresh_all():
     treats every currently-enabled fetch as overdue and runs it right away
     — the same "every timer starts at 0" trick that gives render_preview.py
     a full fresh pass on every run (see first_fetch_pass_done above), just
-    triggered on demand against the Pi's own already-running process
-    instead of only at startup. Covers every source uniformly, whether it's
-    a direct third-party fetch (weather, Spotify, news, ...) or a
-    companion-app one (todos, water, calendar events, ...) — there's
-    nothing to special-case since they're all just entries in this one
-    dict. Deliberately doesn't take data_store.lock: these are simple
-    scalar writes, same as every other last_update assignment in
-    update_data_thread(), and this runs from a signal handler (see
-    force_refresh_handler) — taking a lock there risks deadlocking against
-    the main thread if it's ever raised while render_screen() already
-    holds that same lock."""
+    triggered on demand instead of only at startup. Shared by both trigger
+    paths — a local SIGUSR1 (force_refresh_handler) and a remote button
+    press via the companion app (fetch_force_refresh_request) — so there's
+    only one place that actually does the resetting; each caller logs its
+    own distinguishing context line before calling this, so this one stays
+    generic rather than naming either trigger. Covers every source
+    uniformly, whether it's a direct third-party fetch (weather, Spotify,
+    news, ...) or a companion-app one (todos, water, calendar events, ...)
+    — there's nothing to special-case since they're all just entries in
+    this one dict. Deliberately doesn't take data_store.lock: these are
+    simple scalar writes, same as every other last_update assignment in
+    update_data_thread(), and the SIGUSR1 path specifically calls this
+    from a signal handler, which Python only ever delivers on the main
+    thread — taking a lock there risks deadlocking against that same
+    thread if the signal arrives while render_screen() already holds it."""
     for key in data_store.last_update:
         data_store.last_update[key] = 0
-    logging.info("Force-refresh requested (SIGUSR1) — every gated fetch will run on the next pass.")
+    logging.info("Force-refresh triggered — every gated fetch will run on the next pass.")
 
 
 # --- HELPERS ---
@@ -1566,6 +1570,49 @@ def fetch_away_message():
     }
 
 
+# Remembers the requested_at timestamp fetch_force_refresh_request() has
+# already acted on, so a single button press in the companion app triggers
+# exactly one force_refresh_all() — not one on every 15s poll until she
+# presses it again. Deliberately a plain module-level variable rather than
+# a data_store field: nothing about it is ever displayed, it's purely
+# bookkeeping for this one fetch, same reasoning as update_data_thread's
+# own is_connected/global_printer locals. Resets to None on a restart,
+# which just means the first poll after a restart may re-trigger a
+# force-refresh for an already-handled press — harmless, since main()'s
+# own startup already gives every fetch a full first pass regardless.
+_last_seen_force_refresh_at = None
+
+
+def fetch_force_refresh_request():
+    """GET /api/force-refresh. Lets Charlotte trigger an immediate re-fetch
+    of every currently-enabled data source from the companion app — the
+    remote equivalent of sending the Pi SIGUSR1 by hand (see
+    force_refresh_all()), for when she wants something pushed or pulled
+    right now without needing SSH access herself. The endpoint is
+    read-only and stateless on the server's side: it just reports the
+    timestamp of her most recent button press, same "server stores the
+    latest snapshot" shape as fetch_away_message()/fetch_water_status().
+    All the "did this already fire" bookkeeping lives here instead
+    (_last_seen_force_refresh_at) — only a *new*, later requested_at
+    triggers force_refresh_all(), so the same press can't re-fire on
+    every subsequent poll. Silently no-ops without a config file, same
+    convention as every other companion-app call in this file."""
+    global _last_seen_force_refresh_at
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return
+    url = f"{conf['base_url'].rstrip('/')}/api/force-refresh"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, dict):
+        _log_unexpected_response("/api/force-refresh", data)
+        return
+    requested_at = data.get('requested_at')
+    if requested_at and requested_at != _last_seen_force_refresh_at:
+        _last_seen_force_refresh_at = requested_at
+        logging.info("Force-refresh requested via companion app.")
+        force_refresh_all()
+
+
 # --- SYSTEM STATUS REPORTING ---
 # The original upstream project displayed Pi health (CPU/RAM/ping) as an
 # on-screen fallback widget when Strava/Roborock/Antigravity aren't
@@ -2135,6 +2182,15 @@ def update_data_thread():
                 with data_store.lock:
                     data_store.away_message = am_data
             data_store.last_update['away_message'] = now
+
+        # Same 15s cadence as away_message just above, for the same
+        # reason: this is meant to take effect right away, not sit
+        # waiting for the next scheduled poll of whatever she actually
+        # wanted refreshed. See fetch_force_refresh_request() for how a
+        # single button press only fires force_refresh_all() once.
+        if now - data_store.last_update['force_refresh'] > 15:
+            fetch_force_refresh_request()
+            data_store.last_update['force_refresh'] = now
 
         # Pi health, reported outward rather than drawn on screen (see
         # gather_system_status() above) — 300s is plenty for a "vitals"

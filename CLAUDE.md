@@ -941,7 +941,7 @@ fetch in this file, there's no `data_store` field to write and no "last
 known value" to keep, since nothing about this is ever displayed on the
 Pi's own screen — that's the whole premise.
 
-## Forcing an immediate refresh (SIGUSR1)
+## Forcing an immediate refresh (SIGUSR1, or the companion app)
 
 Every fetch in `update_data_thread()` is gated on
 `now - data_store.last_update[key] > <interval>`, and every entry in
@@ -973,13 +973,23 @@ ever delivers on the main thread: taking a lock there risks deadlocking
 against that same thread if the signal arrives while `render_screen()` is
 already holding it.
 
-A remotely-triggered version — so Charlotte can request a refresh from
-the companion app instead of needing SSH access to the Pi — isn't built
-yet: it would need a new polled companion-app endpoint (same "small
-independent endpoint" shape as `/api/away-message`) and hasn't been
-scoped. Not simply left off, just an explicit gap: the mechanism it would
-call is the same `force_refresh_all()`, so wiring it in later is only a
-poll-and-call away.
+**`fetch_force_refresh_request()`** is the remote equivalent, so Charlotte
+can trigger the same thing from the companion app rather than needing SSH
+access to the Pi herself — same `GET /api/force-refresh` polling shape as
+`/api/away-message`, and it calls the exact same `force_refresh_all()`
+under the hood, so there's nothing to keep in sync between the two
+trigger paths. The endpoint is read-only and stateless on the server's
+side: it just reports the timestamp of her most recent button press in
+the app (`requested_at`), same "server stores the latest snapshot" shape
+as `fetch_away_message()`/`fetch_water_status()`. All the "did this
+already fire" bookkeeping lives Pi-side instead, in a plain module-level
+`_last_seen_force_refresh_at` — deliberately not a `data_store` field,
+since nothing about it is ever displayed, it's purely bookkeeping for
+this one fetch. Only a *new*, later `requested_at` than the one already
+seen triggers `force_refresh_all()`, so a single press can't re-fire on
+every subsequent 15s poll until she presses it again. Polled at the same
+15s cadence as `away_message`, for the same reason — this is meant to
+take effect right away, not sit waiting on a slower interval.
 
 ## Roadmap (not yet built — one session per item)
 
