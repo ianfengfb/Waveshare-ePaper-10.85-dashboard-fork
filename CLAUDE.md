@@ -1070,15 +1070,32 @@ so it's promoted to a brief full-screen celebration instead, reusing
 `draw_away_message()`'s own auto-fit-font machinery as a placeholder
 until the real `draw_growth_plant()`-based celebration screen is ported in.
 
-### Current state: skeleton only
+### Current state: Tasks corner ported, the other three still placeholders
 
-`render_screen()` now draws the four-corner geometry with placeholder
-boxes/labels (and the clock/greeting corner's real small/big/small
-proportions) — enough to validate the layout visually via a mocked
-800×480 `EPD` before porting real widget content into each corner. The
-entire retired 3-column drawing code is preserved verbatim in
-`_unused_old_column_layout()` (never called) as an implementation
-reference while porting — delete it once every corner has real content.
+`render_screen()` draws the four-corner geometry, with the clock/greeting
+corner's real small/big/small proportions and the top-left corner now
+showing the real Tasks widget (`draw_tasks_corner()`) — Spotify/Weather
+and News/NASA+Calendar are still placeholder boxes. The entire retired
+3-column drawing code is preserved verbatim in `_unused_old_column_layout()`
+(never called) as an implementation reference while porting the rest —
+delete it once every corner has real content.
+
+**`draw_tasks_corner()`** is a compact port of the retired layout's task
+grid, not the filler carousel that used to share its column (that's the
+bottom-right corner's job now, not yet ported). Pages
+`TODO_CORNER_TASKS_PER_PAGE` (2) at a time rather than the retired
+layout's `TODO_TASKS_PER_PAGE` (3) — this corner has roughly half the
+total height budget the old 3-column layout gave the Tasks widget (no
+filler carousel to share it with any more, but also no room for a full
+header+divider+5-row-reference the way the old layout had), so a smaller
+page size was needed to fit. Kept as a separate constant from
+`TODO_TASKS_PER_PAGE` rather than repurposing it, so the retired layout's
+own reference code stays internally consistent with the numbers it was
+actually tuned against. The reduction in page size means each remaining
+row actually gets *more* height than before (row height is no longer
+shared three ways), so the 2-line title wrap, completed-task
+strikethrough, and pagination dots all carry over unchanged from the
+retired widget's own logic — only the geometry and page size changed.
 
 No real 7.5" driver is vendored yet (no specific model/hardware revision
 chosen and received) — `render_preview.py` still targets the old 10.85"

@@ -195,7 +195,17 @@ CLOCK_GREETING_ROTATE_SECONDS = 60
 # shrinking with the task count from day to day. A day with fewer than
 # this many tasks just leaves the remaining rows blank; a day with more
 # pages through TODO_TASKS_PER_PAGE at a time (see TODO_TASK_ROTATE_SECONDS).
+# Only used by the retired 3-column layout now (_unused_old_column_layout) —
+# TODO_CORNER_TASKS_PER_PAGE below is the 7.5" corner's own page size.
 TODO_TASKS_PER_PAGE = 3
+# 7.5" redesign: the Tasks corner has roughly half the total height budget
+# the old 3-column layout gave this widget (no header/divider room to
+# spare, and no filler carousel sharing the box any more — that moved to
+# its own corner), so it pages 2 at a time here rather than 3. Kept as a
+# separate constant from TODO_TASKS_PER_PAGE rather than repurposing it,
+# so the retired layout's own reference code stays internally consistent
+# with the numbers it was actually built and tuned against.
+TODO_CORNER_TASKS_PER_PAGE = 2
 # How often the Tasks widget's grid advances to the next page, when there
 # are more tasks than fit on one page. Deterministic off the wall clock
 # (int(time.time() // TODO_TASK_ROTATE_SECONDS) % page_count) rather than a
@@ -2557,6 +2567,98 @@ def draw_away_message(draw, screen_w, screen_h, message):
         y += h + gap
 
 
+def draw_tasks_corner(draw, rect, fonts, todos):
+    """7.5" redesign: Tasks widget for the top-left corner — a compact
+    port of the retired 3-column widget's grid (see
+    _unused_old_column_layout), not the filler carousel that used to
+    share its column (that's the bottom-right corner's job now). Roughly
+    half the total height budget the old layout gave this widget, hence
+    TODO_CORNER_TASKS_PER_PAGE (2) instead of TODO_TASKS_PER_PAGE (3) —
+    but that reduction in row count leaves each remaining row *more*
+    vertical room than before, not less, so the 2-line title wrap and
+    completed-task strikethrough carry over unchanged."""
+    x0, y0, x1, y1 = rect
+    corner_w, corner_h = x1 - x0, y1 - y0
+
+    header_h = 22
+    draw_icon(draw, x0, y0 + 1, "icon_task", (16, 16))
+    draw.text((x0 + 24, y0), "TASKS", font=fonts['14'], fill=0)
+    draw.line((x0, y0 + header_h, x1, y0 + header_h), fill=0, width=1)
+
+    content_top = y0 + header_h + 4
+    content_h = y1 - content_top
+
+    if todos is None or not todos:
+        # Same two-placeholder distinction as the retired layout —
+        # None means "no successful fetch yet", [] means "fetched, but
+        # genuinely nothing today" — just smaller icon/message sizing to
+        # fit this corner's reduced footprint.
+        icon_name, msg = ("icon_disconnected", "Connection Failed") if todos is None else ("icon_task", "No Tasks Today")
+        icon_size = min(40, int(content_h * 0.4))
+        icon_x = x0 + max(0, (corner_w - icon_size) / 2)
+        icon_y = content_top + max(0, (content_h - icon_size - 20) / 2)
+        draw_icon(draw, int(icon_x), int(icon_y), icon_name, (icon_size, icon_size))
+        mw = text_width(draw, msg, fonts['14'])
+        draw.text((x0 + max(0, (corner_w - mw) / 2), icon_y + icon_size + 6), msg, font=fonts['14'], fill=0)
+        return
+
+    checkbox_size = 14
+    due_col_w = 70
+    title_x = x0 + checkbox_size + 6
+    title_max_w = corner_w - checkbox_size - 6 - due_col_w - 4
+
+    row_h = (content_h - TODO_TASK_DOTS_H) / TODO_CORNER_TASKS_PER_PAGE
+    page_count = math.ceil(len(todos) / TODO_CORNER_TASKS_PER_PAGE)
+    page_idx = int(time.time() // TODO_TASK_ROTATE_SECONDS) % page_count
+    page_start = page_idx * TODO_CORNER_TASKS_PER_PAGE
+    page_tasks = todos[page_start:page_start + TODO_CORNER_TASKS_PER_PAGE]
+
+    for i in range(TODO_CORNER_TASKS_PER_PAGE):
+        row_y = content_top + i * row_h
+
+        if i < len(page_tasks):
+            task = page_tasks[i]
+            cb_y = row_y + 3
+            completed = task.get('completed', False)
+
+            if completed:
+                draw.rectangle((x0, cb_y, x0 + checkbox_size, cb_y + checkbox_size), fill=0)
+                draw.line((x0 + 2, cb_y + 7, x0 + 5, cb_y + 10), fill=255, width=1)
+                draw.line((x0 + 5, cb_y + 10, x0 + 11, cb_y + 3), fill=255, width=1)
+            else:
+                draw.rectangle((x0, cb_y, x0 + checkbox_size, cb_y + checkbox_size), outline=0, width=1)
+
+            title_font = fonts['20']
+            title_lines = wrap_lines_limited(draw, task.get('title', ''), title_font, title_max_w, max_lines=2)
+            title_line_h = 22
+            for li, line in enumerate(title_lines):
+                line_y = row_y + li * title_line_h
+                draw.text((title_x, line_y), line, font=title_font, fill=0)
+                if completed and line:
+                    tw = text_width(draw, line, title_font)
+                    bbox = draw.textbbox((title_x, line_y), line, font=title_font)
+                    strike_y = (bbox[1] + bbox[3]) / 2
+                    draw.line((title_x, strike_y, title_x + tw, strike_y), fill=0, width=2)
+
+            due = task.get('due')
+            if due:
+                due_line = wrap_lines_limited(draw, due, fonts['14'], due_col_w, max_lines=1)
+                due_text = due_line[0] if due_line else ''
+                dw = text_width(draw, due_text, fonts['14'])
+                draw.text((x0 + corner_w - dw, row_y + 2), due_text, font=fonts['14'], fill=0)
+        # else: no task on this page for this slot — leave it blank, same
+        # "fixed footprint regardless of task count" rule as the retired
+        # layout.
+
+        if i < TODO_CORNER_TASKS_PER_PAGE - 1:
+            sep_y = row_y + row_h - 4
+            draw.line((x0, sep_y, x0 + corner_w, sep_y), fill=0, width=1)
+
+    if page_count > 1:
+        dots_y0 = content_top + TODO_CORNER_TASKS_PER_PAGE * row_h
+        draw_rotation_dots(draw, x0, corner_w, dots_y0, TODO_TASK_DOTS_H, page_count, page_idx)
+
+
 def render_screen(epd, fonts):
     Himage = Image.new('1', (epd.width, epd.height), 255)
     draw = ImageDraw.Draw(Himage)
@@ -2640,9 +2742,9 @@ def render_screen(epd, fonts):
         tw = text_width(draw, label, fonts['20'])
         draw.text((x0 + max(0, (x1 - x0 - tw) / 2), y0 + (y1 - y0) / 2 - 12), label, font=fonts['20'], fill=0)
 
-    # Top-left: Tasks — direct port of the existing TODO_TASKS_PER_PAGE
-    # grid + filler carousel, unchanged logic, just retuned geometry.
-    draw_corner_box(corners['top_left'], "TASKS")
+    # Top-left: Tasks — see draw_tasks_corner().
+    draw.rectangle(corners['top_left'], outline=0, width=2)
+    draw_tasks_corner(draw, corners['top_left'], fonts, todos)
 
     # Bottom-left: Spotify or Weather — direct port, no overlay needed any
     # more now that the hydration nag moved to the clock/greeting corner
