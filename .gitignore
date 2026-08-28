@@ -24,3 +24,5 @@ roborock_stats.json
 waveshare_api_config.json
 news_api_config.json
 nasa_apod_config.json
+old-token.json
+verify_force_refresh.py
