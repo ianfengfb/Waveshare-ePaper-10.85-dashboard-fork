@@ -480,6 +480,10 @@ def timeout_handler(signum, frame):
     raise HardwareTimeoutError("Hardware Busy-Wait Timeout")
 
 
+def force_refresh_handler(signum, frame):
+    force_refresh_all()
+
+
 def _redact_url(url):
     """Strips a URL's query string before it ever reaches a log line — a
     couple of endpoints (NASA APOD, NewsAPI) pass their API key that way
@@ -660,6 +664,28 @@ data_store = DataStore()
 # duration; main()'s own loop never touches this since the Pi renders
 # continuously regardless of whether the first pass has finished yet.
 first_fetch_pass_done = threading.Event()
+
+
+def force_refresh_all():
+    """Resets every data_store.last_update timer to 0, so the very next
+    update_data_thread() loop iteration (it only sleeps 1s between passes)
+    treats every currently-enabled fetch as overdue and runs it right away
+    — the same "every timer starts at 0" trick that gives render_preview.py
+    a full fresh pass on every run (see first_fetch_pass_done above), just
+    triggered on demand against the Pi's own already-running process
+    instead of only at startup. Covers every source uniformly, whether it's
+    a direct third-party fetch (weather, Spotify, news, ...) or a
+    companion-app one (todos, water, calendar events, ...) — there's
+    nothing to special-case since they're all just entries in this one
+    dict. Deliberately doesn't take data_store.lock: these are simple
+    scalar writes, same as every other last_update assignment in
+    update_data_thread(), and this runs from a signal handler (see
+    force_refresh_handler) — taking a lock there risks deadlocking against
+    the main thread if it's ever raised while render_screen() already
+    holds that same lock."""
+    for key in data_store.last_update:
+        data_store.last_update[key] = 0
+    logging.info("Force-refresh requested (SIGUSR1) — every gated fetch will run on the next pass.")
 
 
 # --- HELPERS ---
@@ -2056,7 +2082,10 @@ def update_data_thread():
                     data_store.codex['error'] = True
             data_store.last_update['codex'] = now
 
-        if ENABLE_ANTIGRAVITY and now - data_store.last_update['antigravity'] > 60:
+        # Usage limits reset on a daily/weekly cadence, not something that
+        # changes minute to minute, so this doesn't need Claude/Codex's
+        # already-slow 10-minute cadence either.
+        if ENABLE_ANTIGRAVITY and now - data_store.last_update['antigravity'] > 7200:
             try:
                 subprocess.run([sys.executable, os.path.join(BASE_DIR, 'antigravity.py')], capture_output=True, timeout=30)
                 limits_path = os.path.join(BASE_DIR, 'limits.json')
@@ -3275,6 +3304,12 @@ def main():
     roborock_user_data = auth_roborock(ROBOROCK_CONF['EMAIL'])
 
     signal.signal(signal.SIGALRM, timeout_handler)
+    # SIGUSR1 forces an immediate refresh of every enabled data source,
+    # bypassing every fetch's normal interval — see force_refresh_all().
+    # Send it with `kill -USR1 <pid>` (or ./force_refresh.sh) from an SSH
+    # session on the Pi any time a fresher read is wanted right now rather
+    # than waiting for the next scheduled poll.
+    signal.signal(signal.SIGUSR1, force_refresh_handler)
     epd = None
 
     try:

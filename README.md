@@ -271,6 +271,20 @@ To reattach to the session later and view the logs or stop the script:
 tmux attach -t dashboard
 ```
 
+### Forcing an immediate refresh
+
+Every widget's data normally refreshes on its own schedule (weather every 10 minutes, todos every
+2 minutes, water status every 20 seconds, etc.) — fine most of the time, but not if you just fixed
+a config file or she just logged water and you want the screen to reflect it right now, without
+waiting out that interval or restarting the whole dashboard (which would also briefly blank the
+screen). While `main.py` is running, from another SSH session:
+```shell
+./force_refresh.sh
+```
+This forces every currently-enabled data source to re-fetch on its very next pass (within about a
+second) — the same full-refresh behaviour `render_preview.py` always gets, just triggered on demand
+against the live process instead of only at startup.
+
 ## How It Works
 
 The dashboard is built on a robust, multi-threaded architecture designed to keep the UI responsive and prevent hardware lockups.

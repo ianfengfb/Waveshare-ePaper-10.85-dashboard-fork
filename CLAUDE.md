@@ -941,6 +941,46 @@ fetch in this file, there's no `data_store` field to write and no "last
 known value" to keep, since nothing about this is ever displayed on the
 Pi's own screen — that's the whole premise.
 
+## Forcing an immediate refresh (SIGUSR1)
+
+Every fetch in `update_data_thread()` is gated on
+`now - data_store.last_update[key] > <interval>`, and every entry in
+`data_store.last_update` starts at `0` (see `DataStore.__init__`) — which
+is *why* `render_preview.py` always gets one full, fresh pass through
+every gated fetch on every run, regardless of each source's real interval
+(see `first_fetch_pass_done` above). `force_refresh_all()` makes that same
+trick available on demand against the Pi's own already-running process,
+not just at startup: it resets every `last_update` entry back to `0`, so
+the very next loop iteration (`update_data_thread` only sleeps 1s between
+passes) treats everything as overdue and fetches it immediately. This
+covers every source uniformly — a direct third-party fetch (weather,
+Spotify, news, ...) and a companion-app one (todos, water, calendar
+events, ...) are both just entries in the same dict, so there's nothing
+to special-case between them; anything currently gated off by its
+`ENABLE_*` flag still stays off, same as any other pass.
+
+Triggered by sending the running process `SIGUSR1` — `kill -USR1 <pid>`,
+or the `force_refresh.sh` helper (`pkill -USR1 -f main.py`) — rather than
+a companion-app-polled flag, since the use case this solves first is
+local: an immediate way to confirm a config change took effect without
+waiting out whatever interval that source normally polls at, or without
+restarting the whole dashboard (which would also briefly blank the
+screen). `force_refresh_all()` deliberately does not take `data_store.lock`
+before writing — these are simple scalar writes, same as every other
+`last_update` assignment elsewhere in this file, and this one specifically
+runs from a signal handler (`force_refresh_handler`), which Python only
+ever delivers on the main thread: taking a lock there risks deadlocking
+against that same thread if the signal arrives while `render_screen()` is
+already holding it.
+
+A remotely-triggered version — so Charlotte can request a refresh from
+the companion app instead of needing SSH access to the Pi — isn't built
+yet: it would need a new polled companion-app endpoint (same "small
+independent endpoint" shape as `/api/away-message`) and hasn't been
+scoped. Not simply left off, just an explicit gap: the mechanism it would
+call is the same `force_refresh_all()`, so wiring it in later is only a
+poll-and-call away.
+
 ## Roadmap (not yet built — one session per item)
 
 These are planned follow-ups; each is its own scoped session. Keep the
