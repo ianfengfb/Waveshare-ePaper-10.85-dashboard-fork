@@ -2843,6 +2843,129 @@ def draw_spotify_weather_corner(draw, Himage, rect, fonts, spotify, weather, aqi
             _draw_centered_line(draw, "Nothing Playing", fonts['20'], text_x, art_y, text_w, art_size)
 
 
+def draw_news_calendar_corner(draw, Himage, rect, fonts, news_headlines, nasa_apod, calendar_events):
+    """7.5" redesign: bottom-right corner — the existing News/NASA +
+    Calendar carousel (see CLAUDE.md's "Left column: Tasks" section),
+    ported essentially unchanged from _unused_old_column_layout's filler
+    block. Greeting and Email moved out to the clock corner, so nothing
+    new joins this rotation — it's the same filler_slides/dots/fallback
+    logic at a smaller size, not a redesign.
+
+    Unlike the other three corners, this one draws no persistent header:
+    the retired filler block never had one either (each slide draws its
+    own small label — "IN THE NEWS"/"UPCOMING" — except NASA, which bleeds
+    its photo across the full block), so adding one here would just
+    duplicate that per-slide labelling."""
+    pad = 8
+    x0, y0, x1, y1 = rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad
+    corner_w, corner_h = x1 - x0, y1 - y0
+
+    # Unlike a headline or a photo, a calendar event carries its own "is
+    # this still valid" signal — its start time. Dropped here rather than
+    # at fetch time, since an event that was still upcoming at the last
+    # poll can lapse before the next one; see CLAUDE.md for the full
+    # reasoning.
+    upcoming_calendar_events = []
+    if calendar_events:
+        now_dt = datetime.now().astimezone()
+        for ev in calendar_events:
+            parsed = _parse_calendar_time(ev['start_time'])
+            if parsed is not None and parsed >= now_dt:
+                upcoming_calendar_events.append(ev)
+
+    # A single combined carousel rather than three mutually exclusive
+    # widgets: calendar events always join whenever there are any
+    # upcoming, and whichever of news/NASA is selected fills the rest —
+    # "News"/"NASA" then "Calendar" as two contiguous blocks in rotation
+    # order, not interleaved.
+    filler_slides = []
+    if TODO_FILLER_WIDGET == "news" and news_headlines:
+        filler_slides.extend(('news', h) for h in news_headlines)
+    elif TODO_FILLER_WIDGET == "nasa" and nasa_apod is not None:
+        filler_slides.append(('nasa', None))
+    filler_slides.extend(('calendar', e) for e in upcoming_calendar_events)
+
+    if filler_slides:
+        # Deterministic off the wall clock (no counter/state to maintain)
+        # — one TODO_FILLER_ROTATE_SECONDS-long slide at a time, cycling
+        # through news/NASA then calendar events in the order appended
+        # above.
+        idx = int(time.time() // TODO_FILLER_ROTATE_SECONDS) % len(filler_slides)
+        slide_type, slide_data = filler_slides[idx]
+
+        # Only reserved/drawn when there's more than one slide total
+        # across both sources combined — one slide needs no "cycling
+        # through several things" cue.
+        dots_h = 16 if len(filler_slides) > 1 else 0
+
+        if slide_type == "news":
+            label_y = y0
+            draw.text((x0, label_y), "IN THE NEWS", font=fonts['14'], fill=0)
+
+            headline_font = fonts['14']
+            line_h = 18
+            max_lines = max(1, int((corner_h - 24 - dots_h) / line_h))
+            lines = wrap_lines_limited(draw, slide_data['title'], headline_font, corner_w, max_lines=max_lines)
+            text_h = len(lines) * line_h
+            avail_h = corner_h - 24 - dots_h
+            text_y0 = label_y + 20 + max(0, (avail_h - text_h) / 2)
+            for li, line in enumerate(lines):
+                lw = text_width(draw, line, headline_font)
+                draw.text((x0 + max(0, (corner_w - lw) / 2), text_y0 + li * line_h),
+                          line, font=headline_font, fill=0)
+
+        elif slide_type == "nasa":
+            # One photo spanning the block — cover-fit (crop to fill, not
+            # letterbox), same dithering as Spotify's album art for visual
+            # consistency. Shrunk by dots_h only when calendar events are
+            # also in the rotation.
+            photo_h = corner_h - dots_h
+            fitted = ImageOps.fit(nasa_apod, (int(corner_w), int(photo_h)), Image.LANCZOS)
+            fitted = ImageEnhance.Contrast(fitted).enhance(3.0)
+            dithered = fitted.convert("1", dither=Image.NONE)
+            Himage.paste(dithered, (int(x0), int(y0)))
+
+        elif slide_type == "calendar":
+            event = slide_data
+            label_y = y0
+            draw.text((x0, label_y), "UPCOMING", font=fonts['14'], fill=0)
+            time_str = _format_calendar_time(event['start_time'])
+            tw = text_width(draw, time_str, fonts['14'])
+            draw.text((x0 + corner_w - tw, label_y), time_str, font=fonts['14'], fill=0)
+
+            title_font = fonts['20']
+            line_h = 22
+            max_lines = max(1, int((corner_h - 24 - dots_h) / line_h))
+            lines = wrap_lines_limited(draw, event['title'], title_font, corner_w, max_lines=max_lines)
+            text_h = len(lines) * line_h
+            avail_h = corner_h - 24 - dots_h
+            text_y0 = label_y + 20 + max(0, (avail_h - text_h) / 2)
+            for li, line in enumerate(lines):
+                lw = text_width(draw, line, title_font)
+                draw.text((x0 + max(0, (corner_w - lw) / 2), text_y0 + li * line_h),
+                          line, font=title_font, fill=0)
+
+        if dots_h:
+            draw_rotation_dots(draw, x0, corner_w, y0, corner_h, len(filler_slides), idx)
+
+    else:
+        # Nothing to show from either source (fresh boot, missing API
+        # key/config, a fetch failure, no calendar events pushed yet, or —
+        # NASA only — today's APOD is a video) — fall back to a row of
+        # cheerful faces, same as the retired layout's own fallback, sized
+        # down to this corner's footprint.
+        n_faces = 3
+        face_size = min(48, int(corner_h) - 20)
+        spacing = 12
+        total_w = n_faces * face_size + (n_faces - 1) * spacing
+        start_x = x0 + max(0, (corner_w - total_w) / 2)
+        face_y = y0 + (corner_h - face_size) / 2
+        for i in range(n_faces):
+            face_x = start_x + i * (face_size + spacing)
+            draw_icon(draw, int(face_x), int(face_y), random.choice(TODO_EMPTY_ROW_ICONS),
+                      (int(face_size), int(face_size)))
+
+
 def render_screen(epd, fonts):
     Himage = Image.new('1', (epd.width, epd.height), 255)
     draw = ImageDraw.Draw(Himage)
@@ -2920,12 +3043,6 @@ def render_screen(epd, fonts):
         'bottom_right': (mid_x + gutter, mid_y + gutter, epd.width - margin, epd.height - margin),
     }
 
-    def draw_corner_box(rect, label):
-        x0, y0, x1, y1 = rect
-        draw.rectangle((x0, y0, x1, y1), outline=0, width=2)
-        tw = text_width(draw, label, fonts['20'])
-        draw.text((x0 + max(0, (x1 - x0 - tw) / 2), y0 + (y1 - y0) / 2 - 12), label, font=fonts['20'], fill=0)
-
     # Top-left: Tasks — see draw_tasks_corner().
     draw.rectangle(corners['top_left'], outline=0, width=2)
     draw_tasks_corner(draw, corners['top_left'], fonts, todos)
@@ -2939,8 +3056,10 @@ def render_screen(epd, fonts):
 
     # Bottom-right: the existing News/NASA + Calendar carousel, ported
     # unchanged — Greeting and Email moved out to the clock corner below,
-    # so this is nearly identical to today's filler carousel.
-    draw_corner_box(corners['bottom_right'], "NEWS / NASA + CALENDAR")
+    # so this is nearly identical to today's filler carousel. See
+    # draw_news_calendar_corner().
+    draw.rectangle(corners['bottom_right'], outline=0, width=2)
+    draw_news_calendar_corner(draw, Himage, corners['bottom_right'], fonts, news_headlines, nasa_apod, calendar_events)
 
     # Top-right: the most structurally novel corner — rotates between a
     # Clock state and a Greeting state, each with its own small/big/small

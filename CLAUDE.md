@@ -1076,15 +1076,18 @@ so it's promoted to a brief full-screen celebration instead, reusing
 `draw_away_message()`'s own auto-fit-font machinery as a placeholder
 until the real `draw_growth_plant()`-based celebration screen is ported in.
 
-### Current state: three corners ported, News/NASA+Calendar still a placeholder
+### Current state: all four corners ported
 
-`render_screen()` draws the four-corner geometry. Top-left (Tasks,
-`draw_tasks_corner()`), top-right (Clock ⟷ Greeting), and bottom-left
-(Spotify/Weather, `draw_spotify_weather_corner()`) all show real content
-now; News/NASA+Calendar is still a placeholder box. The entire retired
-3-column drawing code is preserved verbatim in `_unused_old_column_layout()`
-(never called) as an implementation reference while porting the rest —
-delete it once every corner has real content.
+`render_screen()` draws the four-corner geometry, and every corner now
+shows real content: top-left (Tasks, `draw_tasks_corner()`), top-right
+(Clock ⟷ Greeting), bottom-left (Spotify/Weather,
+`draw_spotify_weather_corner()`), and bottom-right (News/NASA + Calendar,
+`draw_news_calendar_corner()`). The entire retired 3-column drawing code
+is still preserved verbatim in `_unused_old_column_layout()` (never
+called) as an implementation reference — now that every corner has real
+content, the condition CLAUDE.md previously flagged for deleting it is
+met; that deletion just hasn't happened yet (it's a large, separate diff
+from porting the corners themselves).
 
 All corner content is inset from its own border rectangle by a fixed 8px
 (`pad` in `draw_tasks_corner()`, inline in the clock/greeting block) —
@@ -1200,6 +1203,23 @@ smear it. Artist/track text reuses `needs_intl_font()` the same way the
 retired layout did, with the same caveat noted there: only `intl_24`/
 `intl_28` sizes exist today, no smaller intl variant, so a CJK artist/
 track name here reads a little larger than a same-length Latin one would.
+
+**`draw_news_calendar_corner()`** ports the existing filler carousel
+(News/NASA + Calendar) essentially unchanged from the retired layout's own
+filler block — same `filler_slides` construction, same wall-clock-derived
+rotation, same rotation-dots/empty-faces fallback logic, just addressed to
+the corner's own `(x0, y0, corner_w, corner_h)` instead of the old
+column's `col1_x`/`content_w`/`filler_y0`/`filler_h`. Unlike the other
+three corners it draws no persistent header — the retired filler block
+never had one either (each slide draws its own small label, "IN THE
+NEWS"/"UPCOMING", except NASA which bleeds its photo across the full
+block), so adding one here would just duplicate that per-slide labelling
+this widget already had. Font sizes shrank in place (headline `fonts['20']`
+→ `fonts['14']`, calendar title `fonts['24']` → `fonts['20']`) to fit this
+corner's much narrower width, but the wrapping/dynamic-max-lines logic
+itself is untouched — `wrap_lines_limited()` already takes the available
+width as a parameter, so narrowing that width was the only change needed
+for the text to keep fitting correctly at the smaller size.
 
 No real 7.5" driver is vendored yet (no specific model/hardware revision
 chosen and received) — `render_preview.py` still targets the old 10.85"
