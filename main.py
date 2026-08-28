@@ -2332,6 +2332,20 @@ def draw_mixed_text(draw, x, y_center, segments, fill=0):
     return cur_x - x
 
 
+def _draw_centered_line(draw, text, font, box_x, box_y, box_w, box_h, fill=0):
+    """Centres a single line of text within a (box_x, box_y, box_w, box_h)
+    box using its real ink bbox — same "measure, don't assume a nominal
+    offset" convention as draw_away_message() and draw_mixed_text(). Used
+    by the 7.5" redesign's clock/greeting corner, whose font size ranges
+    from a small 14pt label up to an 80pt clock font depending on state,
+    where a single fixed offset can't centre both correctly."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = box_x + max(0, (box_w - tw) / 2) - bbox[0]
+    y = box_y + max(0, (box_h - th) / 2) - bbox[1]
+    draw.text((x, y), text, font=font, fill=fill)
+
+
 def _break_oversized_word(draw, word, font, max_width):
     """Hard-split a single word that's wider than max_width on its own into
     character chunks that each fit — a normal word never hits this, but
@@ -2790,45 +2804,63 @@ def render_screen(epd, fonts):
         # CJK subset font, mixed with Aldrich for the Latin name via
         # draw_mixed_text() rather than a single wrap_lines_limited() call.
         # cjk_small (not cjk_greeting, which is sized for the big greeting
-        # headline) keeps this signature line visually matched to the
-        # small Latin text next to it rather than dwarfing it.
+        # headline below) keeps this signature line visually matched to
+        # the small Latin text next to it rather than dwarfing it.
         top_segments = [("嗨 ", fonts['cjk_small']), (f"{GREETING_NAME}!", fonts['14'])]
-        mid_font_key = 'clock_corner'
-        mid_label = datetime.now().strftime("%H:%M")
-        bot_label = datetime.now().strftime("%a %d %b")
-    else:
-        top_segments = None
-        top_label = "Drink water!" if hydration_alert else f"Mail: {email_unread_today}"
-        # TODO(7.5in-redesign): port the real multi-language greeting
-        # rotation (draw_mixed_text(), GREETING_INTL_HELLOS, etc.) here —
-        # placeholder text below just validates the corner's proportions.
-        mid_font_key = '28'
-        mid_label = f"Hei {GREETING_NAME}"
-        bot_label = affirmation
-
-    y = y0
-    if top_segments is not None:
         seg_w = sum(text_width(draw, t, f) for t, f in top_segments)
-        draw_mixed_text(draw, x0 + max(0, (corner_w - seg_w) / 2), y + small_h / 2, top_segments)
-    else:
-        label = wrap_lines_limited(draw, top_label, fonts['14'], corner_w - 8, max_lines=1)[0]
-        tw = text_width(draw, label, fonts['14'])
-        draw.text((x0 + max(0, (corner_w - tw) / 2), y + max(0, (small_h - 24) / 2)), label, font=fonts['14'], fill=0)
-    y += small_h
+        draw_mixed_text(draw, x0 + max(0, (corner_w - seg_w) / 2), y0 + small_h / 2, top_segments)
 
-    for label, h, font_key in ((mid_label, big_h, mid_font_key), (bot_label, small_h, '14')):
-        label = wrap_lines_limited(draw, label, fonts[font_key], corner_w - 8, max_lines=1)[0]
-        # Real ink bbox, not a fixed nominal offset — mid_font_key ranges
-        # from a small 14pt label to an 80pt clock font depending on
-        # state, and a fixed offset tuned for one badly misplaces the
-        # other (same "measure, don't assume" convention used throughout
-        # this file, e.g. draw_away_message()'s centring).
-        bbox = draw.textbbox((0, 0), label, font=fonts[font_key])
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        text_x = x0 + max(0, (corner_w - tw) / 2) - bbox[0]
-        text_y = y + max(0, (h - th) / 2) - bbox[1]
-        draw.text((text_x, text_y), label, font=fonts[font_key], fill=0)
-        y += h
+        time_label = datetime.now().strftime("%H:%M")
+        _draw_centered_line(draw, time_label, fonts['clock_corner'], x0, y0 + small_h, corner_w, big_h)
+
+        # %a already includes the day of week ("Fri 28 Aug") — a separate
+        # element wasn't needed, just this combined one.
+        date_label = datetime.now().strftime("%a %d %b")
+        _draw_centered_line(draw, date_label, fonts['14'], x0, y0 + small_h + big_h, corner_w, small_h)
+
+    else:
+        top_label = "Drink water!" if hydration_alert else f"Mail: {email_unread_today}"
+        _draw_centered_line(draw, top_label, fonts['14'], x0, y0, corner_w, small_h)
+
+        # Multi-language rotating greeting, ported unchanged from the
+        # retired 3-column layout (_unused_old_column_layout): a
+        # time-of-day word 30% of the time, an international "hello"
+        # (50/50 Chinese vs the rest of GREETING_INTL_HELLOS) the other
+        # 70% — same probabilities, same word lists, just drawn into this
+        # corner's smaller big-band instead of the old column's fixed
+        # y-position. Not wrapped/truncated, same as the original: every
+        # combination was already confirmed to fit its target width.
+        if random.random() < GREETING_INTL_CHANCE:
+            if random.random() < GREETING_ZH_CHANCE:
+                word, font_key = GREETING_ZH_HELLO, 'cjk_greeting'
+            else:
+                word, font_key = random.choice(GREETING_INTL_HELLOS)
+            segments = [(word, fonts[font_key]), (" ", fonts['28'])]
+        else:
+            dt = datetime.now()
+            if dt.hour < 12:
+                time_word = "Morning"
+            elif dt.hour < 17:
+                time_word = "Afternoon"
+            else:
+                time_word = "Evening"
+            segments = [(f"{time_word} ", fonts['28'])]
+        segments.append((GREETING_NAME, fonts['28']))
+
+        seg_w = sum(text_width(draw, t, f) for t, f in segments)
+        draw_mixed_text(draw, x0 + max(0, (corner_w - seg_w) / 2), y0 + small_h + big_h / 2, segments)
+
+        # affirmation is API-sourced text of unpredictable length (unlike
+        # every other string in this corner) — wrap up to 2 lines rather
+        # than the single-line handling everything else here uses, same
+        # as the retired layout's own affirmation line.
+        aff_line_h = 16
+        aff_lines = wrap_lines_limited(draw, affirmation, fonts['14'], corner_w, max_lines=2)
+        aff_total_h = len(aff_lines) * aff_line_h
+        aff_y = y0 + small_h + big_h + max(0, (small_h - aff_total_h) / 2)
+        for i, line in enumerate(aff_lines):
+            lw = text_width(draw, line, fonts['14'])
+            draw.text((x0 + max(0, (corner_w - lw) / 2), aff_y + i * aff_line_h), line, font=fonts['14'], fill=0)
 
     return Himage
 
