@@ -2483,6 +2483,62 @@ def draw_growth_plant(draw, cx, ground_y, growth_fraction):
         draw.ellipse((lx - leaf_r, ly - leaf_r, lx + leaf_r, ly + leaf_r), fill=0)
 
 
+def draw_hydration_celebration(draw, fonts, screen_w, screen_h, water):
+    """7.5" redesign: full-screen hydration/growth takeover — replaces the
+    draw_away_message() placeholder render_screen() used while this
+    corner-turned-full-screen widget was still being ported (see
+    CLAUDE.md's 7.5" redesign notes). Near-verbatim port of the retired
+    3-column layout's middle-column overlay (same header/badge/plant/text
+    arrangement, same draw_growth_plant() call), just re-centred across
+    the full screen width instead of one narrow column — the old design
+    already targeted this exact canvas height (480px), so the vertical
+    numbers below (ground_y etc.) carry over unchanged; only the
+    horizontal centring and font sizes grew to fill the wider takeover."""
+    header_icon_size = 56
+    header_text = "STAY HYDRATED!"
+    header_font = fonts['40']
+    header_gap = 14
+    header_y = 24
+    label_w = text_width(draw, header_text, header_font)
+    group_w = header_icon_size + header_gap + label_w
+    group_x = (screen_w - group_w) / 2
+    draw_icon(draw, int(group_x), header_y, "icon_droplet", (header_icon_size, header_icon_size))
+    _draw_centered_line(draw, header_text, header_font, group_x + header_icon_size + header_gap,
+                         header_y, label_w, header_icon_size)
+
+    divider_y = header_y + header_icon_size + 12
+    draw.line((100, divider_y, screen_w - 100, divider_y), fill=0, width=2)
+
+    # Lifetime badge — how many times she's grown a plant to full across
+    # all time, not just the current growth cycle. Pinned to the top-right
+    # corner rather than centred with the header, so it reads as a
+    # separate "trophy count" at a glance instead of crowding the title.
+    badge_size = 32
+    badge_x, badge_y = screen_w - 150, 28
+    draw_icon(draw, badge_x, badge_y, "icon_plant_grown", (badge_size, badge_size))
+    lifetime_count = water.get('plants_grown_lifetime', 0)
+    _draw_centered_line(draw, f"x {lifetime_count}", fonts['28'], badge_x + badge_size + 10,
+                         badge_y, 60, badge_size)
+
+    cx = screen_w / 2
+    ground_y = 400
+    progress_litres = water.get('progress_litres', 0.0)
+    growth_fraction = progress_litres / WATER_GROWTH_TARGET_LITRES
+    draw_growth_plant(draw, cx, ground_y, growth_fraction)
+
+    # No calendar window to anchor the label to (growth just resets on
+    # completion, whenever that happens — see WATER_GROWTH_TARGET_LITRES),
+    # so show progress against the fixed target instead of a bare total.
+    total_text = f"{progress_litres:.1f} / {WATER_GROWTH_TARGET_LITRES:.0f} L grown"
+    tw = text_width(draw, total_text, fonts['32'])
+    draw.text((cx - tw / 2, ground_y + 15), total_text, font=fonts['32'], fill=0)
+
+    last_amount = water.get('last_amount_litres')
+    sub_text = f"+{last_amount:.1f} L just logged!" if last_amount else "New log recorded!"
+    sw = text_width(draw, sub_text, fonts['24'])
+    draw.text((cx - sw / 2, ground_y + 52), sub_text, font=fonts['24'], fill=0)
+
+
 def get_weather_icon(code, is_day=1):
     if code == 0:
         return "icon_sun" if is_day else "icon_moon"
@@ -2991,10 +3047,7 @@ def render_screen(epd, fonts):
         # (at most a handful of times a day) that reserving a permanent
         # corner for it year-round would be wasteful — see CLAUDE.md's
         # 7.5" redesign notes.
-        # TODO(7.5in-redesign): replace this placeholder with the real
-        # draw_growth_plant()-based celebration screen, ported from the
-        # old middle-column overlay below.
-        draw_away_message(draw, epd.width, epd.height, "Stay Hydrated!")
+        draw_hydration_celebration(draw, fonts, epd.width, epd.height, water)
         return Himage
 
     # Mutually exclusive with show_water in practice (that needs a log

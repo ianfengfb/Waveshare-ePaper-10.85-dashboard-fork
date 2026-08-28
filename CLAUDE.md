@@ -1068,22 +1068,41 @@ file, not a new mechanism.
 **Two full-screen takeover modes, checked in priority order before any
 corner draws:** away message (existing, `draw_away_message()` — already
 fully resolution-agnostic, needed zero changes for the new panel size)
-takes priority over the hydration growth pop-up, which is **new** as a
-full-screen mode — it used to overlay the middle column in the 3-column
-layout, but at "happens a handful of times a day at most" frequency,
-dedicating a permanent corner to it year-round would have been wasteful,
-so it's promoted to a brief full-screen celebration instead, reusing
-`draw_away_message()`'s own auto-fit-font machinery as a placeholder
-until the real `draw_growth_plant()`-based celebration screen is ported in.
+takes priority over the hydration growth celebration
+(`draw_hydration_celebration()`), which is **new** as a full-screen mode
+— it used to overlay the middle column in the 3-column layout, but at
+"happens a handful of times a day at most" frequency, dedicating a
+permanent corner to it year-round would have been wasteful, so it's
+promoted to a brief full-screen celebration instead.
 
-### Current state: all four corners ported, retired layout deleted
+**`draw_hydration_celebration()`** is a near-verbatim port of the retired
+3-column layout's middle-column overlay — same header (`icon_droplet` +
+"STAY HYDRATED!"), same lifetime badge (`icon_plant_grown` + "x N"), same
+`draw_growth_plant()` call, same progress/just-logged text lines below it
+— just re-centred across the full screen width instead of one narrow
+column. The vertical numbers (`ground_y` etc.) carry over unchanged from
+the retired widget: that column was already the same 480px canvas height
+as this corner's takeover, so only the horizontal centring and a few font
+sizes needed to grow to fill the wider full-screen space. The header and
+lifetime badge are laid out with the same icon+text group-centring
+pattern as the clock/greeting corner's email/nag badge (see above): the
+badge is deliberately pinned at a fixed offset from the right edge
+(`screen_w - 150`) rather than centred with the header, since "STAY
+HYDRATED!" is a fixed string whose rendered width never changes — a fixed
+gap between the two is safe here in a way it wouldn't be next to
+variable-length text.
+
+### Current state: all four corners ported, retired layout deleted, hydration celebration real
 
 `render_screen()` draws the four-corner geometry, and every corner now
 shows real content: top-left (Tasks, `draw_tasks_corner()`), top-right
 (Clock ⟷ Greeting), bottom-left (Spotify/Weather,
 `draw_spotify_weather_corner()`), and bottom-right (News/NASA + Calendar,
-`draw_news_calendar_corner()`). The retired 3-column drawing code
-(`_unused_old_column_layout()`) has been deleted now that every corner it
+`draw_news_calendar_corner()`). The hydration/growth full-screen takeover
+also now shows its real `draw_growth_plant()`-based celebration screen
+rather than the `draw_away_message()` placeholder used while it was being
+built. The retired 3-column drawing code (`_unused_old_column_layout()`)
+has been deleted now that every corner (and the hydration takeover) it
 was a reference for has real content — along with `TODO_TASKS_PER_PAGE`
 and `draw_sparkline()`, both of which had no caller left once that
 function was gone (`TODO_CORNER_TASKS_PER_PAGE` is the only page-size
@@ -1091,11 +1110,7 @@ constant now; the retired 3-column layout's own comments explaining *why*
 it was a separate constant were rewritten to stop referring to deleted
 code). Nothing else lost its last caller in the same pass — `weather`/
 `spotify`/`todos`/etc. are still real `render_screen()` locals feeding the
-four corner functions, and `draw_growth_plant()` is deliberately still
-here despite having no caller yet: it's the *planned* real content for
-the hydration/growth full-screen takeover (currently a
-`draw_away_message()` placeholder — see the `TODO(7.5in-redesign)`
-comment above), not retired code.
+four corner functions.
 
 All corner content is inset from its own border rectangle by a fixed 8px
 (`pad` in `draw_tasks_corner()`, inline in the clock/greeting block) —
