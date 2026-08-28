@@ -91,7 +91,13 @@ def _install_hardware_mocks(output_path):
             pass
 
     class EPD:
-        width = 1360
+        # 7.5" redesign target (see CLAUDE.md) — render_screen() derives
+        # its whole four-corner layout from epd.width/height, so this is
+        # the only number that needs to change for the mock to match the
+        # new panel; no real driver is vendored yet (that still needs the
+        # physical panel in hand to pick the right file/GPIO pins), so
+        # this mock is the only way to preview the new layout for now.
+        width = 800
         height = 480
 
         def init(self):

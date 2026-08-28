@@ -39,7 +39,10 @@ pip install -r requirements-preview.txt
 python render_preview.py
 ```
 
-Produces `output.png` (1360×480) that you can open and eyeball. `requirements-preview.txt`
+Produces `output.png` (800×480 — the 7.5" redesign's target resolution,
+see below; `render_preview.py`'s mock reports this size even though no
+real 7.5" driver is vendored yet) that you can open and eyeball.
+`requirements-preview.txt`
 is a deliberate subset of the Pi's dependencies — it skips every hardware-only
 package (`spidev`, `gpiozero`, `lgpio`, `aiomqtt`, `roborock`, `paho-mqtt`);
 see README.md for the full Raspberry Pi install.
@@ -1245,12 +1248,15 @@ width as a parameter, so narrowing that width was the only change needed
 for the text to keep fitting correctly at the smaller size.
 
 No real 7.5" driver is vendored yet (no specific model/hardware revision
-chosen and received) — `render_preview.py` still targets the old 10.85"
-mock dimensions and hasn't been touched. The 800×480 mock used to validate
-the skeleton so far lives only in an ad hoc test script, not in the repo;
-wiring the real driver + updating `render_preview.py`'s mock to match is
-its own later step (needs the actual panel in hand to pick the right
-driver file and confirm GPIO pins).
+chosen and received) — `render_preview.py`'s mock `EPD` now reports
+800×480 (updated once the corner layout above was finalised, so local
+preview reflects the real target size instead of the old 10.85" canvas),
+but it's still the same fake `EPD` class, not a real driver: no actual
+SPI/GPIO code has changed, and `main.py` still has no vendored 7.5"
+driver file to fall back to on real hardware. Wiring the real driver in
+is its own later step that needs the actual panel in hand to pick the
+right driver file and confirm GPIO pins — until then, `render_preview.py`
+is still the only way to see the 7.5" layout rendered, on a Pi or off it.
 
 ## Roadmap (not yet built — one session per item)
 
