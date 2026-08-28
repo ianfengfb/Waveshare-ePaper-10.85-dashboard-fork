@@ -672,20 +672,24 @@ def force_refresh_all():
     treats every currently-enabled fetch as overdue and runs it right away
     — the same "every timer starts at 0" trick that gives render_preview.py
     a full fresh pass on every run (see first_fetch_pass_done above), just
-    triggered on demand against the Pi's own already-running process
-    instead of only at startup. Covers every source uniformly, whether it's
-    a direct third-party fetch (weather, Spotify, news, ...) or a
-    companion-app one (todos, water, calendar events, ...) — there's
-    nothing to special-case since they're all just entries in this one
-    dict. Deliberately doesn't take data_store.lock: these are simple
-    scalar writes, same as every other last_update assignment in
-    update_data_thread(), and this runs from a signal handler (see
-    force_refresh_handler) — taking a lock there risks deadlocking against
-    the main thread if it's ever raised while render_screen() already
-    holds that same lock."""
+    triggered on demand instead of only at startup. Shared by both trigger
+    paths — a local SIGUSR1 (force_refresh_handler) and a remote button
+    press via the companion app (fetch_force_refresh_request) — so there's
+    only one place that actually does the resetting; each caller logs its
+    own distinguishing context line before calling this, so this one stays
+    generic rather than naming either trigger. Covers every source
+    uniformly, whether it's a direct third-party fetch (weather, Spotify,
+    news, ...) or a companion-app one (todos, water, calendar events, ...)
+    — there's nothing to special-case since they're all just entries in
+    this one dict. Deliberately doesn't take data_store.lock: these are
+    simple scalar writes, same as every other last_update assignment in
+    update_data_thread(), and the SIGUSR1 path specifically calls this
+    from a signal handler, which Python only ever delivers on the main
+    thread — taking a lock there risks deadlocking against that same
+    thread if the signal arrives while render_screen() already holds it."""
     for key in data_store.last_update:
         data_store.last_update[key] = 0
-    logging.info("Force-refresh requested (SIGUSR1) — every gated fetch will run on the next pass.")
+    logging.info("Force-refresh triggered — every gated fetch will run on the next pass.")
 
 
 # --- HELPERS ---
