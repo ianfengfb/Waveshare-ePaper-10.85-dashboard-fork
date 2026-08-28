@@ -2577,7 +2577,11 @@ def draw_tasks_corner(draw, rect, fonts, todos):
     but that reduction in row count leaves each remaining row *more*
     vertical room than before, not less, so the 2-line title wrap and
     completed-task strikethrough carry over unchanged."""
-    x0, y0, x1, y1 = rect
+    # Inset from the corner's own border rectangle (drawn by the caller)
+    # rather than drawing flush against it — content touching the border
+    # reads as cramped/overlapping at this resolution.
+    pad = 8
+    x0, y0, x1, y1 = rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad
     corner_w, corner_h = x1 - x0, y1 - y0
 
     header_h = 22
