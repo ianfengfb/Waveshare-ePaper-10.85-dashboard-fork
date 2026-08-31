@@ -836,6 +836,34 @@ missed "she's back" toggle just delays the dashboard reappearing by one
 poll, while a missed "she's away" fetch would expose the real dashboard
 (and whatever's on it) when the point was to hide it.
 
+### Custom affirmation fetch (`fetch_custom_affirmation()`)
+
+The greeting corner's affirmation line (see `GREETING_FALLBACK_AFFIRMATIONS`
+above) normally comes from the public, keyless affirmations.dev API — this
+adds an optional override: `GET /api/affirmation`, letting Charlotte set
+her own line from the companion app instead. Checked first, on the same
+900s cadence the affirmations.dev fetch already used (a custom
+affirmation is just as slow-changing as the online one, so one shared
+interval covers both rather than adding a second `data_store.last_update`
+key) — `update_data_thread()` calls `fetch_custom_affirmation()`, and only
+falls through to the affirmations.dev request when it comes back falsy.
+
+**This is the one fetch in the file where `None` does *not* mean "keep
+the last known value."** Every other companion-app fetch returns `None`
+on failure specifically so `update_data_thread()` leaves
+`data_store.<field>` untouched — but `data_store.affirmation` needs to
+end up holding *something* every poll (there's always a line to show),
+and which source should supply it can legitimately change from one poll
+to the next (she sets a custom one, or clears it back to the online
+default). So here `None` means "nothing custom right now, use the online
+API on this same poll" — a non-dict response, an unreachable endpoint, a
+missing config file, and an explicit `null`/blank `affirmation` field are
+all treated identically as that "nothing custom set" case, with no
+separate enabled/disabled flag needed. Expects the same
+`{"affirmation": str}` response shape affirmations.dev itself returns,
+so the two sources are interchangeable from `update_data_thread()`'s
+point of view — just try one, then the other.
+
 ## Away message (full-screen takeover)
 
 A remote switch, driven entirely by the companion app (see "Away message

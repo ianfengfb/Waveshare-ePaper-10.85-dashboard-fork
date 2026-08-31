@@ -163,12 +163,14 @@ GREETING_INTL_HELLOS = [
     ("Czesc", '35'), ("Merhaba", '35'), ("Kumusta", '35'), ("Habari", '35'),
     ("Sawasdee", '35'), ("Namaste", '35'), ("Salut", '35'),
 ]
-# Small-font line under the greeting: a short positive sentence from the
-# affirmations.dev API (keyless, like the weather/crypto widgets). Used as
-# the initial value before the first fetch completes, and kept as the
-# on-screen value whenever a fetch fails — the API is a small hobby-scale
-# service with no uptime guarantee, so a dead/unreachable endpoint should
-# never blank the line.
+# Small-font line under the greeting: a short positive sentence, normally
+# from the affirmations.dev API (keyless, like the weather/crypto
+# widgets) — or a custom one Charlotte sets herself from the companion
+# app, which takes priority whenever one is set (see
+# fetch_custom_affirmation()). Used as the initial value before the first
+# fetch completes, and kept as the on-screen value whenever a fetch
+# fails — affirmations.dev is a small hobby-scale service with no uptime
+# guarantee, so a dead/unreachable endpoint should never blank the line.
 GREETING_FALLBACK_AFFIRMATIONS = [
     "You make every day a little brighter.",
     "Small steps today, big wins ahead.",
@@ -1593,6 +1595,31 @@ def fetch_away_message():
     }
 
 
+def fetch_custom_affirmation():
+    """GET /api/affirmation — an optional custom affirmation Charlotte can
+    set from the companion app, checked before falling back to the public
+    affirmations.dev API (see update_data_thread()). Unlike every other
+    companion-app fetch in this file, None here does NOT mean "keep the
+    last known value" — it means "no custom affirmation is set right now
+    (or the app isn't reachable/configured)", which is update_data_thread's
+    signal to fall through to affirmations.dev on that same poll instead
+    of leaving data_store.affirmation untouched. A non-dict response, an
+    unreachable endpoint, a missing config file, and an explicit
+    null/blank affirmation field are all treated identically as "nothing
+    custom set, use the online one" — the companion app doesn't need a
+    separate enabled/disabled flag, an empty value already means off."""
+    conf = _load_waveshare_api_config()
+    if not conf:
+        return None
+    url = f"{conf['base_url'].rstrip('/')}/api/affirmation"
+    data = net.get_json(url, headers={'X-Api-Key': conf['api_key']})
+    if not isinstance(data, dict):
+        _log_unexpected_response("/api/affirmation", data)
+        return None
+    text = data.get('affirmation')
+    return text.strip() if isinstance(text, str) and text.strip() else None
+
+
 # Remembers the requested_at timestamp fetch_force_refresh_request() has
 # already acted on, so a single button press in the companion app triggers
 # exactly one force_refresh_all() — not one on every 15s poll until she
@@ -1973,12 +2000,22 @@ def update_data_thread():
             data_store.last_update['weather'] = now
 
         # Slow-changing on purpose: a phrase to read over time, not something
-        # that needs to update every render like the clock does.
+        # that needs to update every render like the clock does. Checks the
+        # companion app for a custom affirmation first (see
+        # fetch_custom_affirmation()) — setting one there takes priority
+        # over the public API on the very next poll; clearing it there
+        # falls back to affirmations.dev on the poll after that. Same
+        # 900s cadence covers both checks, since a custom affirmation is
+        # just as slow-changing as the online one.
         if now - data_store.last_update['affirmation'] > 900:
-            aff_data = net.get_json(API_ENDPOINTS['affirmation'], timeout=8)
-            text = aff_data.get('affirmation') if isinstance(aff_data, dict) else None
-            if isinstance(text, str) and text.strip():
-                with data_store.lock: data_store.affirmation = text.strip()
+            custom = fetch_custom_affirmation()
+            if custom:
+                with data_store.lock: data_store.affirmation = custom
+            else:
+                aff_data = net.get_json(API_ENDPOINTS['affirmation'], timeout=8)
+                text = aff_data.get('affirmation') if isinstance(aff_data, dict) else None
+                if isinstance(text, str) and text.strip():
+                    with data_store.lock: data_store.affirmation = text.strip()
             data_store.last_update['affirmation'] = now
 
         if ENABLE_STRAVA:
