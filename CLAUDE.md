@@ -301,15 +301,18 @@ count, so the filler carousel below it is always exactly
 `row_bottom - TODO_TASKS_PER_PAGE * row_h` tall too — both are fixed,
 predictable blocks now, neither one's size depends on the other's content.
 `TODO_FILLER_WIDGET` (`"news"` |
-`"nasa"`, default `"news"`) is a mode selector, same reasoning as
-`EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: exactly one of the two occupies
-that half of the rotation at a time. Local default for now, intended to
-eventually be set remotely via `/api/widget-config` the same way those
-two are — see roadmap. Calendar events are deliberately *not* part of
-this selector — they always join the rotation whenever there are any
-upcoming, regardless of which of news/NASA is chosen (see "Combined
-carousel" below). `update_data_thread` only polls whichever of news/NASA
-is currently selected, but always polls calendar events unconditionally.
+`"nasa"` | `None`, default `"news"`) is a mode selector, same reasoning as
+`EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`: at most one of the two occupies
+that half of the rotation at a time. `None` means neither — the filler
+carousel is calendar-events-only, same "one of several mutually exclusive
+states, including an explicit off" shape as `EMAIL_PROVIDER`'s own
+`None`. Local default for now, intended to eventually be set remotely via
+`/api/widget-config` the same way those two are — see roadmap. Calendar
+events are deliberately *not* part of this selector — they always join
+the rotation whenever there are any upcoming, regardless of which of the
+three values this is (see "Combined carousel" below). `update_data_thread`
+only polls whichever of news/NASA is currently selected (neither, when
+`None`), but always polls calendar events unconditionally.
 
 `render_screen()` builds one ordered `filler_slides` list —
 `[('news', headline), ...]` or `[('nasa', None)]` (whichever
@@ -407,7 +410,8 @@ exactly as before this redesign.
 
 **Calendar events always join the carousel** — up to 3 upcoming iPhone
 calendar events, contributed as one slide each regardless of whether
-`TODO_FILLER_WIDGET` is `"news"` or `"nasa"`. Each event shows a small
+`TODO_FILLER_WIDGET` is `"news"`, `"nasa"`, or `None` (neither — see
+above). Each event shows a small
 "UPCOMING" label plus a formatted time (`_format_calendar_time()`:
 `"Today 3:00 PM"` / `"Tomorrow 9:00 AM"` / `"Fri 10:00 AM"` for anything
 further out — with at most 3 events shown, they're never more than about
@@ -778,10 +782,19 @@ a dict, overrides the module-level `EMAIL_PROVIDER`/`MIDDLE_COLUMN_WIDGET`/
 (declared `global` there alongside `global_printer`). Only recognised
 values are applied — `email_provider` must be `"gmail"`/`"outlook"`/`null`,
 `middle_widget` must be `"spotify"`/`"weather"`, `todo_filler` must be
-`"news"`/`"nasa"` — anything else (including a field the endpoint omits,
-like `top_n` today) leaves the current value alone rather than disabling
-the widget, per the roadmap's original "degrade like every other fetch"
-requirement. `ENABLE_TODO` and the other `ENABLE_*` toggles are untouched
+`"news"`/`"nasa"`/`null` — anything else (an unrecognised string, or a
+field the endpoint omits entirely, like `top_n` today) leaves the current
+value alone rather than disabling the widget, per the roadmap's original
+"degrade like every other fetch" requirement. **Caveat shared by
+`email_provider` and `todo_filler` specifically**: because `null` is
+itself one of their recognised values, an *omitted* key is
+indistinguishable on the Pi's side from an explicit `null` — both read as
+Python `None` via `dict.get()`, and both get applied. So the companion
+app should always send `todo_filler` (and `email_provider`) explicitly
+once either is wired up, never omit them expecting the Pi to "leave it
+alone" — that fallback only actually works for a genuinely-unrecognised
+value (a typo, an old string), not a missing key. `ENABLE_TODO` and the
+other `ENABLE_*` toggles are untouched
 by this endpoint; they remain local edit-and-redeploy constants.
 
 ### Hydration widget fetch (`fetch_water_status()`)

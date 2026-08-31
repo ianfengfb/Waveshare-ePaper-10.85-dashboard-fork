@@ -340,16 +340,20 @@ WAVESHARE_API_CONF = {
     'CONFIG_FILE': os.path.join(BASE_DIR, 'waveshare_api_config.json')
 }
 
-# Which of news or NASA shares the Tasks widget's filler slot: "news" or
-# "nasa". A mode selector rather than independent ENABLE_* flags, same
-# reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET — exactly one of the
-# two occupies that half of the rotation at a time. Local default for
-# now, intended to eventually be set remotely via the companion app's
-# /api/widget-config endpoint the same way those two are — see CLAUDE.md
-# roadmap. Calendar events are NOT part of this selector — they always
-# join the rotation whenever there are any upcoming, regardless of
-# whether news or NASA is chosen here (see "Left column: Tasks" in
-# CLAUDE.md for the combined-carousel design).
+# Which of news or NASA shares the Tasks widget's filler slot: "news",
+# "nasa", or None for neither — a mode selector rather than independent
+# ENABLE_* flags, same reasoning as EMAIL_PROVIDER/MIDDLE_COLUMN_WIDGET —
+# at most one of the two occupies that half of the rotation at a time.
+# None means the filler carousel is calendar-events-only: neither news
+# nor NASA is polled or shown, so the carousel is just whatever upcoming
+# calendar events there are (or the TODO_EMPTY_ROW_ICONS fallback if none
+# — see draw_news_calendar_corner()). Local default for now, intended to
+# eventually be set remotely via the companion app's /api/widget-config
+# endpoint the same way those two are — see CLAUDE.md roadmap. Calendar
+# events are NOT part of this selector — they always join the rotation
+# whenever there are any upcoming, regardless of which of the three
+# values this is (see "Left column: Tasks" in CLAUDE.md for the
+# combined-carousel design).
 TODO_FILLER_WIDGET = "news"
 
 # How long each slide in the Tasks widget's filler carousel stays on
@@ -651,9 +655,10 @@ class DataStore:
         # Unlike news_headlines/nasa_apod, this is NOT gated by
         # TODO_FILLER_WIDGET — calendar events always join the filler
         # carousel whenever there are any upcoming, regardless of
-        # whether news or NASA is the other half of the rotation (see
-        # CLAUDE.md). None (or no upcoming events) falls back to
-        # TODO_EMPTY_ROW_ICONS only when news/NASA also has nothing.
+        # whether news, NASA, or neither (TODO_FILLER_WIDGET == None) is
+        # the other half of the rotation (see CLAUDE.md). None (or no
+        # upcoming events) falls back to TODO_EMPTY_ROW_ICONS only when
+        # news/NASA also has nothing.
         self.calendar_events = None
         # A remote full-screen takeover: while enabled is True, render_screen()
         # replaces every widget with just `message`, auto-sized to fill the
@@ -2242,13 +2247,14 @@ def update_data_thread():
                 if middle_widget in ('spotify', 'weather'):
                     MIDDLE_COLUMN_WIDGET = middle_widget
                 todo_filler = cfg.get('todo_filler')
-                if todo_filler in ('news', 'nasa'):
+                if todo_filler in ('news', 'nasa', None):
                     TODO_FILLER_WIDGET = todo_filler
             data_store.last_update['widget_config'] = now
 
         # Only fetches whichever of news/NASA is the active
-        # TODO_FILLER_WIDGET — no point polling both when just one fills
-        # half of the Tasks widget's filler carousel at a time. Every 4
+        # TODO_FILLER_WIDGET — no point polling both when at most one
+        # fills half of the Tasks widget's filler carousel at a time (and
+        # neither is polled at all when TODO_FILLER_WIDGET is None). Every 4
         # hours for news — a handful of headlines don't need to feel
         # real-time, and this also bounds how often post_news_articles()
         # pushes a fresh batch to the companion app. NASA's photo changes
@@ -2908,9 +2914,11 @@ def draw_news_calendar_corner(draw, Himage, rect, fonts, news_headlines, nasa_ap
 
     # A single combined carousel rather than three mutually exclusive
     # widgets: calendar events always join whenever there are any
-    # upcoming, and whichever of news/NASA is selected fills the rest —
-    # "News"/"NASA" then "Calendar" as two contiguous blocks in rotation
-    # order, not interleaved.
+    # upcoming, and whichever of news/NASA is selected (if either) fills
+    # the rest — "News"/"NASA" then "Calendar" as two contiguous blocks in
+    # rotation order, not interleaved. When TODO_FILLER_WIDGET is None,
+    # neither branch below adds anything, so the carousel is just
+    # calendar events (or the empty-faces fallback if there are none).
     filler_slides = []
     if TODO_FILLER_WIDGET == "news" and news_headlines:
         filler_slides.extend(('news', h) for h in news_headlines)
