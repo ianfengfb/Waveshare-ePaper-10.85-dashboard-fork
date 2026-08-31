@@ -3065,6 +3065,11 @@ def render_screen(epd, fonts):
     # one. See CLAUDE.md for the full corner-by-corner design writeup.
     margin, gutter = 16, 8
     mid_x, mid_y = epd.width // 2, epd.height // 2
+    # Softens the four corner boxes against the sharp 90° screen edge —
+    # purely cosmetic, no effect on any corner's content geometry (each
+    # draw_*_corner() function insets from the same rect regardless of
+    # how its border is drawn).
+    CORNER_BORDER_RADIUS = 16
 
     corners = {
         'top_left':     (margin, margin, mid_x - gutter, mid_y - gutter),
@@ -3074,28 +3079,28 @@ def render_screen(epd, fonts):
     }
 
     # Top-left: Tasks — see draw_tasks_corner().
-    draw.rectangle(corners['top_left'], outline=0, width=2)
+    draw.rounded_rectangle(corners['top_left'], radius=CORNER_BORDER_RADIUS, outline=0, width=2)
     draw_tasks_corner(draw, corners['top_left'], fonts, todos)
 
     # Bottom-left: Spotify or Weather — direct port, no overlay needed any
     # more now that the hydration nag moved to the clock/greeting corner
     # and the growth pop-up is a full-screen takeover above. See
     # draw_spotify_weather_corner().
-    draw.rectangle(corners['bottom_left'], outline=0, width=2)
+    draw.rounded_rectangle(corners['bottom_left'], radius=CORNER_BORDER_RADIUS, outline=0, width=2)
     draw_spotify_weather_corner(draw, Himage, corners['bottom_left'], fonts, spotify, weather, aqi)
 
     # Bottom-right: the existing News/NASA + Calendar carousel, ported
     # unchanged — Greeting and Email moved out to the clock corner below,
     # so this is nearly identical to today's filler carousel. See
     # draw_news_calendar_corner().
-    draw.rectangle(corners['bottom_right'], outline=0, width=2)
+    draw.rounded_rectangle(corners['bottom_right'], radius=CORNER_BORDER_RADIUS, outline=0, width=2)
     draw_news_calendar_corner(draw, Himage, corners['bottom_right'], fonts, news_headlines, nasa_apod, calendar_events)
 
     # Top-right: the most structurally novel corner — rotates between a
     # Clock state and a Greeting state, each with its own small/big/small
     # internal layout (see CLAUDE.md). Sketched in more detail here since
     # its proportions are worth validating before porting real content.
-    draw.rectangle(corners['top_right'], outline=0, width=2)
+    draw.rounded_rectangle(corners['top_right'], radius=CORNER_BORDER_RADIUS, outline=0, width=2)
     # Inset from the border like draw_tasks_corner() — content flush
     # against it reads as cramped/overlapping at this resolution.
     tr_x0, tr_y0, tr_x1, tr_y1 = corners['top_right']

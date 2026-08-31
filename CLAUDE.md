@@ -1120,6 +1120,16 @@ All corner content is inset from its own border rectangle by a fixed 8px
 drawing flush against the border read as cramped/overlapping. Any new
 corner content should do the same.
 
+Each corner's border is a rounded rectangle (`draw.rounded_rectangle(...,
+radius=CORNER_BORDER_RADIUS)`, 16px) rather than a sharp-cornered one —
+purely cosmetic, softening the box against the screen's own square edge.
+It doesn't affect any corner's content geometry: every `draw_*_corner()`
+function insets from the same `(x0, y0, x1, y1)` rect regardless of how
+its border is drawn, and 16px is comfortably smaller than the 8px content
+padding's clearance from the arc (the arc only encroaches within
+`radius - radius/√2 ≈ 4.7px` of a squared corner), so nothing drawn at the
+padded origin ever touches the curve.
+
 **`_draw_centered_line()`** centres a single line of text within a box
 using its real ink bbox, same "measure, don't assume a nominal offset"
 convention as `draw_away_message()`. Needed once the clock/greeting
