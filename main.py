@@ -197,12 +197,14 @@ CLOCK_GREETING_ROTATE_SECONDS = 60
 # or shrinking with the task count from day to day. A day with fewer than
 # this many tasks just leaves the remaining rows blank; a day with more
 # pages through TODO_CORNER_TASKS_PER_PAGE at a time (see
-# TODO_TASK_ROTATE_SECONDS). 2 rather than the retired 3-column layout's
-# old value of 3 — this corner has roughly half the total height budget
-# that layout gave the Tasks widget (no header/divider room to spare, and
-# no filler carousel sharing the box any more — that moved to its own
-# corner), so a smaller page size was needed to fit.
-TODO_CORNER_TASKS_PER_PAGE = 2
+# TODO_TASK_ROTATE_SECONDS). Was 2 briefly (half the retired 3-column
+# layout's old page size of 3, to fit this corner's smaller footprint —
+# no header/divider room to spare, and no filler carousel sharing the box
+# any more), but 3 fits comfortably too: shrinking row_h (see
+# draw_tasks_corner()) to 3-per-page still leaves enough clearance for a
+# 2-line wrapped title before the row separator, verified visually, so
+# there was no need to shrink any font size to make the extra row fit.
+TODO_CORNER_TASKS_PER_PAGE = 3
 # How often the Tasks widget's grid advances to the next page, when there
 # are more tasks than fit on one page. Deterministic off the wall clock
 # (int(time.time() // TODO_TASK_ROTATE_SECONDS) % page_count) rather than a
@@ -2661,12 +2663,12 @@ def draw_tasks_corner(draw, rect, fonts, todos):
     port of the retired 3-column layout's task grid (deleted once every
     corner had real content ported in — see CLAUDE.md), not the filler
     carousel that used to share its column (that's the bottom-right
-    corner's job now). Roughly half the total height budget the old
-    layout gave this widget, hence TODO_CORNER_TASKS_PER_PAGE (2) instead
-    of that layout's old page size of 3 — but that reduction in row count
-    leaves each remaining row *more*
-    vertical room than before, not less, so the 2-line title wrap and
-    completed-task strikethrough carry over unchanged."""
+    corner's job now). TODO_CORNER_TASKS_PER_PAGE (3) matches that
+    layout's own old page size, even though this corner has roughly half
+    its total height budget (no header/divider room to spare, and no
+    filler carousel sharing the box any more) — row_h just comes out
+    smaller here as a result, and the 2-line title wrap/completed-task
+    strikethrough still fit within it without needing a smaller font."""
     # Inset from the corner's own border rectangle (drawn by the caller)
     # rather than drawing flush against it — content touching the border
     # reads as cramped/overlapping at this resolution.

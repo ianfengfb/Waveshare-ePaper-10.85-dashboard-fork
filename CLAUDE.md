@@ -1227,20 +1227,17 @@ size.
 
 **`draw_tasks_corner()`** is a compact port of the retired layout's task
 grid, not the filler carousel that used to share its column (that's the
-bottom-right corner's job now, not yet ported). Pages
-`TODO_CORNER_TASKS_PER_PAGE` (2) at a time rather than the retired
-layout's `TODO_TASKS_PER_PAGE` (3) — this corner has roughly half the
-total height budget the old 3-column layout gave the Tasks widget (no
-filler carousel to share it with any more, but also no room for a full
-header+divider+5-row-reference the way the old layout had), so a smaller
-page size was needed to fit. Kept as a separate constant from
-`TODO_TASKS_PER_PAGE` rather than repurposing it, so the retired layout's
-own reference code stays internally consistent with the numbers it was
-actually tuned against. The reduction in page size means each remaining
-row actually gets *more* height than before (row height is no longer
-shared three ways), so the 2-line title wrap, completed-task
-strikethrough, and pagination dots all carry over unchanged from the
-retired widget's own logic — only the geometry and page size changed.
+bottom-right corner's job now). Pages `TODO_CORNER_TASKS_PER_PAGE` (3) at
+a time, matching the retired layout's own old page size — briefly 2, when
+this corner's much smaller height budget (no filler carousel sharing the
+box any more, but also no room for a full header+divider+5-row-reference
+the way the old layout had) seemed to need a smaller page to fit, but 3
+turned out to fit fine too: `row_h` (see the function) just comes out
+smaller than the retired layout's own row height, and the 2-line title
+wrap/completed-task strikethrough/pagination dots all still have enough
+clearance at that smaller row height without needing a smaller font —
+verified visually, including the tightest case (a title that wraps to a
+full 2 lines).
 
 **`draw_spotify_weather_corner()`** ports whichever of Spotify/Weather
 `MIDDLE_COLUMN_WIDGET` selects into the bottom-left corner — the simplest
