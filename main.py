@@ -446,7 +446,7 @@ finally:
     os.chdir(_prev_cwd)
 
 try:
-    from waveshare_epd import epd10in85
+    from waveshare_epd import epd7in5_V2
     import bambulabs_api as bl
     from roborock.web_api import RoborockApiClient
     from roborock.devices.device_manager import create_device_manager, UserParams
@@ -3299,11 +3299,11 @@ def main():
     epd = None
 
     try:
-        epd = epd10in85.EPD()
+        epd = epd7in5_V2.EPD()
         epd.init()
         epd.Clear()
         time.sleep(1)
-        epd.init_Part()
+        epd.init_part()
 
         fonts = load_fonts()
 
@@ -3333,7 +3333,7 @@ def main():
                     epd.init()
                     epd.display(buf)
                     time.sleep(2)
-                    epd.init_Part()
+                    epd.init_part()
                     signal.alarm(0)
                     refresh_counter = 0
                 else:
@@ -3345,7 +3345,7 @@ def main():
                     # (RST pin) that pulls it out of that state, so re-arm before
                     # every frame. Skipped on faster boards (see the flag above).
                     if PANEL_REINIT_EACH_FRAME:
-                        epd.init_Part()
+                        epd.init_part()
                     epd.display_Partial(buf, 0, 0, epd.width, epd.height)
                     signal.alarm(0)
                     refresh_counter += 1
@@ -3374,7 +3374,7 @@ def main():
     except KeyboardInterrupt:
         try:
             signal.alarm(0)
-            epd10in85.epdconfig.module_exit(cleanup=True)
+            epd7in5_V2.epdconfig.module_exit(cleanup=True)
         except:
             pass
         exit()

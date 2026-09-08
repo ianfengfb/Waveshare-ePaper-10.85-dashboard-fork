@@ -6,11 +6,11 @@ Same codebase as the Pi: this script auto-detects whether the real
 waveshare_epd driver is importable.
 
 - On the Raspberry Pi (with spidev/gpiozero/lgpio installed): the real
-  epd10in85.EPD is used, and it drives the physical panel as normal.
+  epd7in5_V2.EPD is used, and it drives the physical panel as normal.
 - Everywhere else (e.g. this Windows/VS Code dev machine): the
   waveshare_epd package plus its RPi.GPIO/spidev imports are stubbed out
   *before* main.py is imported, so main.py's `from waveshare_epd import
-  epd10in85` line resolves to a fake EPD whose display()/getbuffer() write
+  epd7in5_V2` line resolves to a fake EPD whose display()/getbuffer() write
   a PNG instead of talking to SPI. See docs/CLAUDE.md for why this has to
   happen at the sys.modules level rather than by subclassing.
 
@@ -34,7 +34,7 @@ def _hardware_available():
     """Try the real driver import. True only where the Pi's GPIO/SPI stack
     (spidev, gpiozero, lgpio) is actually installed."""
     try:
-        import waveshare_epd.epd10in85  # noqa: F401
+        import waveshare_epd.epd7in5_V2  # noqa: F401
         return True
     except Exception:
         # A failed import can leave a half-initialised package behind;
@@ -79,7 +79,7 @@ def _install_hardware_mocks(output_path):
     sys.modules['spidev'] = spidev_mod
 
     epd_pkg = types.ModuleType('waveshare_epd')
-    epd10in85_mod = types.ModuleType('waveshare_epd.epd10in85')
+    epd7in5_V2_mod = types.ModuleType('waveshare_epd.epd7in5_V2')
 
     class _FakeEpdConfig:
         @staticmethod
@@ -133,12 +133,12 @@ def _install_hardware_mocks(output_path):
             frame.save(output_path)
             print(f"[mock epd] wrote {output_path}")
 
-    epd10in85_mod.EPD = EPD
-    epd10in85_mod.epdconfig = _FakeEpdConfig
-    epd_pkg.epd10in85 = epd10in85_mod
+    epd7in5_V2_mod.EPD = EPD
+    epd7in5_V2_mod.epdconfig = _FakeEpdConfig
+    epd_pkg.epd7in5_V2 = epd7in5_V2_mod
 
     sys.modules['waveshare_epd'] = epd_pkg
-    sys.modules['waveshare_epd.epd10in85'] = epd10in85_mod
+    sys.modules['waveshare_epd.epd7in5_V2'] = epd7in5_V2_mod
 
 
 def main():
@@ -168,10 +168,10 @@ def main():
     dashboard.auth_gmail()
     dashboard.auth_outlook()
 
-    epd = dashboard.epd10in85.EPD()
+    epd = dashboard.epd7in5_V2.EPD()
     epd.init()
     epd.Clear()
-    epd.init_Part()
+    epd.init_part()
 
     fonts = dashboard.load_fonts()
 
