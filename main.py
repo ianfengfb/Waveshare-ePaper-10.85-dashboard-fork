@@ -53,6 +53,24 @@ FONT_DIR = os.path.join(BASE_DIR, 'fnt')
 ICON_DIR = os.path.join(BASE_DIR, 'icons')
 LOG_FILE = os.path.join(BASE_DIR, 'dashboard.log')
 
+# --- DEMO MODE ---
+# Temporary, for showing Charlotte the widgets in one sitting — a single
+# switch rather than hand-editing every rotation constant below (and
+# risking forgetting to revert one). Speeds up every corner's rotation
+# (Clock/Greeting, Tasks pagination, News/Calendar carousel) AND the
+# render loop's own redraw cadence together, since the screen can only
+# visibly change on an actual redraw — a fast rotation constant paired
+# with the normal ~60s redraw cadence would just skip most of the
+# faster states rather than reliably showing them.
+# MUST be set back to False before this becomes her everyday dashboard:
+# a ~20s refresh cadence is fine for a short demo, but not for continuous
+# use — it burns through the e-ink panel's rated refresh-cycle lifetime
+# far faster than the normal ~60s cadence, and refreshes more often into
+# whatever margin this Pi+HAT combo already has on its power supply (see
+# the brownout/reboot investigation from testing this on real hardware).
+DEMO_MODE = True
+DEMO_RENDER_INTERVAL_SECONDS = 20
+
 # --- WIDGET TOGGLES ---
 ENABLE_STRAVA = False # For payed tier only
 ENABLE_BAMBU = False
@@ -187,8 +205,9 @@ GREETING_FALLBACK_AFFIRMATIONS = [
 # way the news/calendar carousel does. A shorter value would just mean
 # more, smaller jumps rather than a smoother transition, since the display
 # only changes on an actual redraw — same reasoning as every other
-# rotation cadence in this file.
-CLOCK_GREETING_ROTATE_SECONDS = 60
+# rotation cadence in this file. See DEMO_MODE above for why this is
+# conditional rather than a bare constant.
+CLOCK_GREETING_ROTATE_SECONDS = DEMO_RENDER_INTERVAL_SECONDS if DEMO_MODE else 60
 
 # --- TASKS WIDGET ---
 # How many task rows the Tasks corner shows at once — fixed, regardless of
@@ -212,8 +231,9 @@ TODO_CORNER_TASKS_PER_PAGE = 3
 # correct across a script restart — same mechanism TODO_FILLER_ROTATE_SECONDS
 # uses for the filler carousel below it. Matched to main()'s own ~60s render
 # cadence for the same reason: the display can only change on an actual
-# redraw, so a shorter value wouldn't visibly speed anything up.
-TODO_TASK_ROTATE_SECONDS = 60
+# redraw, so a shorter value wouldn't visibly speed anything up outside
+# DEMO_MODE, which also speeds up the redraw cadence itself (see above).
+TODO_TASK_ROTATE_SECONDS = DEMO_RENDER_INTERVAL_SECONDS if DEMO_MODE else 60
 # Height reserved at the bottom of the task grid for a pagination dot row
 # (draw_rotation_dots(), the same helper the filler carousel corner uses),
 # so a day with more than TODO_CORNER_TASKS_PER_PAGE tasks gives Charlotte a
@@ -366,8 +386,9 @@ TODO_FILLER_WIDGET = "news"
 # main()'s own ~60s render cadence — a shorter value here would just mean
 # some redraws land in the same rotation bucket as the last one (no
 # visible change) rather than smoothly speeding up the rotation, since
-# the display can only ever change on an actual redraw.
-TODO_FILLER_ROTATE_SECONDS = 60
+# the display can only ever change on an actual redraw. See DEMO_MODE
+# above, which speeds up the redraw cadence itself to match.
+TODO_FILLER_ROTATE_SECONDS = DEMO_RENDER_INTERVAL_SECONDS if DEMO_MODE else 60
 
 # newsdata.io — free key from newsdata.io, entered once by hand into a
 # gitignored config file, same "never commit a secret" pattern as every
@@ -3368,7 +3389,11 @@ def main():
                 logging.error(f"Unexpected error in main: {e}")
 
             elapsed = time.time() - start_time
-            sleep_time = max(5, 60 - elapsed)
+            # DEMO_MODE speeds this cadence up too (see its definition) —
+            # otherwise the faster rotation constants above would just get
+            # skipped past on the normal ~60s redraw, not shown.
+            render_interval = DEMO_RENDER_INTERVAL_SECONDS if DEMO_MODE else 60
+            sleep_time = max(5, render_interval - elapsed)
             time.sleep(sleep_time)
 
     except KeyboardInterrupt:
