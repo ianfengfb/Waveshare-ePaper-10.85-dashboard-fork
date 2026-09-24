@@ -713,6 +713,18 @@ data_store = DataStore()
 # continuously regardless of whether the first pass has finished yet.
 first_fetch_pass_done = threading.Event()
 
+# Lets update_data_thread() (a fresh water log — see the water-fetch branch
+# below) or force_refresh_all() (SIGUSR1, or the companion app's
+# force-refresh button) wake main()'s render loop immediately instead of
+# waiting out its own ~60s sleep. Resetting last_update timers alone (what
+# force_refresh_all() used to do on its own) only made the *next fetch*
+# happen sooner — the render loop is a separate thread on its own timer, so
+# the freshly-fetched data still sat unseen until that timer next elapsed.
+# That mattered most for the hydration widget: WATER_SHOW_SECONDS is only
+# 60s, so a log that lands just after a render can lapse before the next
+# one ever happens.
+render_now_event = threading.Event()
+
 
 def force_refresh_all():
     """Resets every data_store.last_update timer to 0, so the very next
@@ -737,6 +749,11 @@ def force_refresh_all():
     thread if the signal arrives while render_screen() already holds it."""
     for key in data_store.last_update:
         data_store.last_update[key] = 0
+    # Also wake main()'s render loop right away — see render_now_event's own
+    # definition for why resetting the fetch timers alone isn't enough to
+    # make "force refresh" actually show up on screen sooner. Event.set()
+    # is safe to call from a signal handler: it doesn't block or allocate.
+    render_now_event.set()
     logging.info("Force-refresh triggered — every gated fetch will run on the next pass.")
 
 
@@ -2252,7 +2269,20 @@ def update_data_thread():
             w_data = fetch_water_status()
             if w_data is not None:
                 with data_store.lock:
+                    # Caught here rather than after the assignment below,
+                    # since data_store.water is about to be overwritten with
+                    # w_data — this is the only point where both the old and
+                    # new last_logged_at are still available to compare.
+                    fresh_log = (
+                        w_data.get('last_logged_at') is not None
+                        and w_data['last_logged_at'] != data_store.water.get('last_logged_at')
+                    )
                     data_store.water = w_data
+                if fresh_log:
+                    # Don't wait for main()'s next scheduled render — see
+                    # render_now_event's own definition for why that could
+                    # otherwise miss the WATER_SHOW_SECONDS window entirely.
+                    render_now_event.set()
             data_store.last_update['water'] = now
 
         # Polled every 15s — faster than every other companion-app fetch,
@@ -3394,7 +3424,14 @@ def main():
             # skipped past on the normal ~60s redraw, not shown.
             render_interval = DEMO_RENDER_INTERVAL_SECONDS if DEMO_MODE else 60
             sleep_time = max(5, render_interval - elapsed)
-            time.sleep(sleep_time)
+            # A plain time.sleep() here would make render_now_event pointless
+            # — waiting on the event with the same timeout still renders on
+            # the normal cadence when nothing wakes it early, but lets a
+            # fresh water log or a force-refresh request (see
+            # render_now_event's own definition) trigger an immediate
+            # re-render instead.
+            if render_now_event.wait(timeout=sleep_time):
+                render_now_event.clear()
 
     except KeyboardInterrupt:
         try:
