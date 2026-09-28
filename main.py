@@ -713,16 +713,16 @@ data_store = DataStore()
 # continuously regardless of whether the first pass has finished yet.
 first_fetch_pass_done = threading.Event()
 
-# Lets update_data_thread() (a fresh water log — see the water-fetch branch
-# below) or force_refresh_all() (SIGUSR1, or the companion app's
-# force-refresh button) wake main()'s render loop immediately instead of
-# waiting out its own ~60s sleep. Resetting last_update timers alone (what
-# force_refresh_all() used to do on its own) only made the *next fetch*
-# happen sooner — the render loop is a separate thread on its own timer, so
-# the freshly-fetched data still sat unseen until that timer next elapsed.
-# That mattered most for the hydration widget: WATER_SHOW_SECONDS is only
-# 60s, so a log that lands just after a render can lapse before the next
-# one ever happens.
+# Lets update_data_thread() (a fresh water log or Spotify play/pause/track
+# change — see those fetch branches below) or force_refresh_all() (SIGUSR1,
+# or the companion app's force-refresh button) wake main()'s render loop
+# immediately instead of waiting out its own ~60s sleep. Resetting
+# last_update timers alone (what force_refresh_all() used to do on its own)
+# only made the *next fetch* happen sooner — the render loop is a separate
+# thread on its own timer, so the freshly-fetched data still sat unseen
+# until that timer next elapsed. That mattered most for the hydration
+# widget: WATER_SHOW_SECONDS is only 60s, so a log that lands just after a
+# render can lapse before the next one ever happens.
 render_now_event = threading.Event()
 
 
@@ -2258,7 +2258,20 @@ def update_data_thread():
             s_data = fetch_spotify_data()
             if s_data is not None:
                 with data_store.lock:
+                    # Same "catch it before it's overwritten" comparison as
+                    # the water-fetch branch below — covers a fresh
+                    # play/pause/track-change alike, not just PAUSED->PLAYING,
+                    # since a stale "still playing" or stale track name is
+                    # just as worth catching sooner.
+                    changed = (
+                        s_data['status'] != data_store.spotify.get('status')
+                        or s_data['text'] != data_store.spotify.get('text')
+                    )
                     data_store.spotify = s_data
+                if changed:
+                    # Don't wait for main()'s next scheduled render — see
+                    # render_now_event's own definition.
+                    render_now_event.set()
             data_store.last_update['spotify'] = now
 
         # Polled every 20s (not the 120s/600s cadence above) because
